@@ -6,12 +6,18 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function TabLayout() {
   const [menuVisible, setMenuVisible] = useState(false);
+  const [activeTab, setActiveTab] = useState("dashboard");
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
   const go = (path: string) => {
     setMenuVisible(false);
     router.push(path as any);
+  };
+
+  const handleTabPress = (tabName: string, route: string) => {
+    setActiveTab(tabName);
+    router.push(route as any);
   };
 
   return (
@@ -30,14 +36,34 @@ export default function TabLayout() {
 
       {/* Fixed Navbar */}
       <View style={[styles.navbar, { paddingBottom: insets.bottom }]}>
-        <Pressable onPress={() => router.push("/(tabs)/dashboard")} style={styles.navItem}>
-          <Ionicons name="home-outline" size={24} color="#2e7d32" />
-          <Text style={styles.navText}>Home</Text>
+        <Pressable 
+          onPress={() => handleTabPress("dashboard", "/(tabs)/dashboard")} 
+          style={styles.navItem}
+        >
+          <Ionicons 
+            name={activeTab === "dashboard" ? "home" : "home-outline"} 
+            size={24} 
+            color={activeTab === "dashboard" ? "#2e7d32" : "#666"} 
+            style={activeTab === "dashboard" && styles.activeIcon}
+          />
+          <Text style={[styles.navText, activeTab === "dashboard" && styles.activeNavText]}>
+            Home
+          </Text>
         </Pressable>
 
-        <Pressable onPress={() => router.push("/(tabs)/sales_list")} style={styles.navItem}>
-          <Ionicons name="cart-outline" size={24} color="#666" />
-          <Text style={styles.navText}>Sales</Text>
+        <Pressable 
+          onPress={() => handleTabPress("sales_list", "/(tabs)/sales_list")} 
+          style={styles.navItem}
+        >
+          <Ionicons 
+            name={activeTab === "sales_list" ? "cart" : "cart-outline"} 
+            size={24} 
+            color={activeTab === "sales_list" ? "#2e7d32" : "#666"}
+            style={activeTab === "sales_list" && styles.activeIcon}
+          />
+          <Text style={[styles.navText, activeTab === "sales_list" && styles.activeNavText]}>
+            Sales
+          </Text>
         </Pressable>
 
         <View style={styles.centerBtnWrapper}>
@@ -46,14 +72,34 @@ export default function TabLayout() {
           </Pressable>
         </View>
 
-        <Pressable onPress={() => router.push("/(tabs)/products")} style={styles.navItem}>
-          <Ionicons name="cube-outline" size={24} color="#666" />
-          <Text style={styles.navText}>Products</Text>
+        <Pressable 
+          onPress={() => handleTabPress("products", "/(tabs)/products")} 
+          style={styles.navItem}
+        >
+          <Ionicons 
+            name={activeTab === "products" ? "cube" : "cube-outline"} 
+            size={24} 
+            color={activeTab === "products" ? "#2e7d32" : "#666"}
+            style={activeTab === "products" && styles.activeIcon}
+          />
+          <Text style={[styles.navText, activeTab === "products" && styles.activeNavText]}>
+            Products
+          </Text>
         </Pressable>
 
-        <Pressable onPress={() => router.push("/(tabs)/profile")} style={styles.navItem}>
-          <Ionicons name="person-outline" size={24} color="#666" />
-          <Text style={styles.navText}>Profile</Text>
+        <Pressable 
+          onPress={() => handleTabPress("profile", "/(tabs)/profile")} 
+          style={styles.navItem}
+        >
+          <Ionicons 
+            name={activeTab === "profile" ? "person" : "person-outline"} 
+            size={24} 
+            color={activeTab === "profile" ? "#2e7d32" : "#666"}
+            style={activeTab === "profile" && styles.activeIcon}
+          />
+          <Text style={[styles.navText, activeTab === "profile" && styles.activeNavText]}>
+            Profile
+          </Text>
         </Pressable>
       </View>
 
@@ -97,7 +143,7 @@ export default function TabLayout() {
             </ScrollView>
 
             <TouchableOpacity style={styles.closeBtn} onPress={() => setMenuVisible(false)}>
-              <Text style={{ color: "#fff", fontWeight: 'bold' }}>Close</Text>
+              <Text style={{ color: "#fff", fontWeight: 'bold', fontSize: 16 }}>Close</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
@@ -108,7 +154,7 @@ export default function TabLayout() {
 
 const MenuItem = ({ label, icon, onPress }: any) => (
   <TouchableOpacity style={styles.card} onPress={onPress}>
-    <Ionicons name={icon} size={22} color="#2e7d32" />
+    <Ionicons name={icon} size={24} color="#2e7d32" style={styles.menuIcon} />
     <Text style={styles.cardText}>{label}</Text>
   </TouchableOpacity>
 );
@@ -138,9 +184,17 @@ const styles = StyleSheet.create({
     justifyContent: "center" 
   },
   navText: { 
-    fontSize: 10, 
+    fontSize: 11, 
     marginTop: 2, 
-    color: "#666" 
+    color: "#666",
+    fontWeight: "500"
+  },
+  activeNavText: {
+    color: "#2e7d32",
+    fontWeight: "700",
+  },
+  activeIcon: {
+    fontWeight: "bold",
   },
   centerBtnWrapper: {
     width: 70,
@@ -174,15 +228,17 @@ const styles = StyleSheet.create({
     maxHeight: "80%" 
   },
   title: { 
-    fontSize: 18, 
+    fontSize: 20, 
     fontWeight: "bold", 
     marginBottom: 20, 
-    color: '#2e7d32' 
+    color: '#2e7d32',
+    marginTop: 10
   },
   grid: { 
     flexDirection: "row", 
     flexWrap: "wrap", 
-    justifyContent: "space-between" 
+    justifyContent: "space-between",
+    marginBottom: 10
   },
   card: { 
     width: "30%", 
@@ -198,16 +254,25 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   cardText: { 
-    fontSize: 11, 
-    marginTop: 6, 
+    fontSize: 12, 
+    marginTop: 8, 
     textAlign: "center", 
-    color: '#444' 
+    color: '#444',
+    fontWeight: "500"
   },
   closeBtn: { 
     marginTop: 10, 
     backgroundColor: "#2e7d32", 
     padding: 16, 
     borderRadius: 12, 
-    alignItems: "center" 
+    alignItems: "center",
+    shadowColor: "#2e7d32",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  menuIcon: {
+    fontWeight: "bold",
   }
 });

@@ -9,7 +9,7 @@ export default function ProfileScreen() {
       {/* Green Header Area */}
       <View style={styles.headerArea}>
         <View style={styles.headerTop}>
-          <ThemedText style={styles.headerTitle}>👤 My Profile</ThemedText>
+          <ThemedText style={styles.headerTitle}>My Profile</ThemedText>
           <TouchableOpacity style={styles.backBtn}>
             <ThemedText style={styles.backBtnText}>← Back to Dashboard</ThemedText>
           </TouchableOpacity>
