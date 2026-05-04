@@ -1,0 +1,165 @@
+import React from "react";
+import { StyleSheet, View, ScrollView, TouchableOpacity, TextInput, Image } from "react-native";
+import { ThemedText } from "@/components/themed-text";
+import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-icons";
+
+export default function ProfileScreen() {
+  return (
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      {/* Green Header Area */}
+      <View style={styles.headerArea}>
+        <View style={styles.headerTop}>
+          <ThemedText style={styles.headerTitle}>👤 My Profile</ThemedText>
+          <TouchableOpacity style={styles.backBtn}>
+            <ThemedText style={styles.backBtnText}>← Back to Dashboard</ThemedText>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.content}>
+        {/* Account Summary Card */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="information-circle" size={20} color="#2e7d32" />
+            <ThemedText style={styles.cardHeaderText}>Account Information</ThemedText>
+          </View>
+          <View style={styles.profileInfoCenter}>
+            <View style={styles.avatarPlaceholder}>
+              <ThemedText style={styles.avatarText}>SM</ThemedText>
+            </View>
+            <ThemedText style={styles.userName}>Sujon Mia</ThemedText>
+            <View style={styles.roleBadge}>
+              <ThemedText style={styles.roleText}>ORGADMIN</ThemedText>
+            </View>
+          </View>
+          <View style={styles.statsRow}>
+            <StatItem icon="calendar" label="Account Created" value="08 Feb 2026" />
+            <StatItem icon="login" label="Last Login" value="04 May 2026 02:59" />
+          </View>
+        </View>
+
+        {/* Personal Information Card */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="person" size={20} color="#2e7d32" />
+            <ThemedText style={styles.cardHeaderText}>Personal Information</ThemedText>
+          </View>
+          <InputLabel label="Username" value="bhFishMart" editable={false} />
+          <ThemedText style={styles.subHint}>Username cannot be changed</ThemedText>
+          <InputLabel label="Full Name *" value="Sujon Mia" />
+          <InputLabel label="Email *" value="sujon@yopmail.com" />
+          <InputLabel label="Phone Number" value="0123456789" />
+        </View>
+
+        {/* Change Password Card */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="key" size={20} color="#2e7d32" />
+            <ThemedText style={styles.cardHeaderText}>Change Password</ThemedText>
+          </View>
+          <View style={styles.infoAlert}>
+            <Ionicons name="information-circle" size={16} color="#004085" />
+            <ThemedText style={styles.alertText}>
+              Enter your current password and a new password if you want to change it.
+            </ThemedText>
+          </View>
+          <InputLabel label="Current Password" placeholder="Current password" secure />
+          <InputLabel label="New Password" placeholder="New password" secure />
+          <ThemedText style={styles.subHint}>Minimum 6 characters</ThemedText>
+          <InputLabel label="Confirm Password" placeholder="Confirm new password" secure />
+        </View>
+
+        {/* My Organizations Card */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <FontAwesome5 name="building" size={18} color="#2e7d32" />
+            <ThemedText style={styles.cardHeaderText}>My Organizations</ThemedText>
+          </View>
+          <View style={styles.orgRow}>
+            <ThemedText style={styles.orgName}>BH Fish Mart</ThemedText>
+            <View style={styles.primaryBadge}>
+              <Ionicons name="star" size={12} color="white" />
+              <ThemedText style={styles.primaryText}>Primary</ThemedText>
+            </View>
+          </View>
+        </View>
+
+        {/* Action Buttons */}
+        <View style={styles.footerBtns}>
+          <TouchableOpacity style={styles.refreshBtn}>
+            <Ionicons name="refresh" size={18} color="#333" />
+            <ThemedText style={styles.refreshText}>Refresh</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.saveBtn}>
+            <Ionicons name="save" size={18} color="white" />
+            <ThemedText style={styles.saveText}>Save Changes</ThemedText>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
+// Sub-components
+const InputLabel = ({ label, value, placeholder, editable = true, secure = false }: any) => (
+  <View style={styles.inputGroup}>
+    <ThemedText style={styles.label}>{label}</ThemedText>
+    <TextInput
+      style={[styles.input, !editable && styles.disabledInput]}
+      value={value}
+      placeholder={placeholder}
+      editable={editable}
+      secureTextEntry={secure}
+    />
+  </View>
+);
+
+const StatItem = ({ icon, label, value }: any) => (
+  <View style={styles.statItem}>
+    <View style={styles.statTop}>
+      <MaterialCommunityIcons name={icon} size={16} color="#2e7d32" />
+      <ThemedText style={styles.statLabel}>{label}</ThemedText>
+    </View>
+    <ThemedText style={styles.statValue}>{value}</ThemedText>
+  </View>
+);
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#f4f6f9" },
+  headerArea: { backgroundColor: "#2e7d32", paddingTop: 20, paddingBottom: 60, paddingHorizontal: 15 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerTitle: { color: 'white', fontSize: 20, fontWeight: 'bold' },
+  backBtn: { backgroundColor: 'rgba(255,255,255,0.2)', padding: 8, borderRadius: 5 },
+  backBtnText: { color: 'white', fontSize: 12 },
+  content: { marginTop: -40, paddingHorizontal: 15, paddingBottom: 30 },
+  card: { backgroundColor: 'white', borderRadius: 10, padding: 15, marginBottom: 15, elevation: 2 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 10, marginBottom: 15 },
+  cardHeaderText: { marginLeft: 10, fontSize: 16, fontWeight: 'bold', color: '#333' },
+  profileInfoCenter: { alignItems: 'center', marginBottom: 20 },
+  avatarPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#e8f5e9', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#2e7d32' },
+  avatarText: { fontSize: 24, fontWeight: 'bold', color: '#2e7d32' },
+  userName: { fontSize: 18, fontWeight: 'bold', marginTop: 10 },
+  roleBadge: { backgroundColor: '#ffc107', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 15, marginTop: 5 },
+  roleText: { fontSize: 10, fontWeight: 'bold', color: '#000' },
+  statsRow: { borderTopWidth: 1, borderTopColor: '#f0f0f0', paddingTop: 15, flexDirection: 'row', justifyContent: 'space-between' },
+  statItem: { flex: 1 },
+  statTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  statLabel: { fontSize: 11, color: '#666', marginLeft: 5 },
+  statValue: { fontSize: 12, fontWeight: 'bold', color: '#333' },
+  inputGroup: { marginBottom: 15 },
+  label: { fontSize: 13, fontWeight: 'bold', color: '#555', marginBottom: 5 },
+  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, padding: 10, fontSize: 14, color: '#333' },
+  disabledInput: { backgroundColor: '#f9f9f9', color: '#888' },
+  subHint: { fontSize: 10, color: '#999', marginTop: -10, marginBottom: 10 },
+  infoAlert: { backgroundColor: '#e7f3ff', padding: 10, borderRadius: 6, flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+  alertText: { fontSize: 11, color: '#004085', marginLeft: 8, flex: 1 },
+  orgRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f8e9', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#c8e6c9' },
+  orgName: { fontWeight: 'bold', color: '#2e7d32' },
+  primaryBadge: { backgroundColor: '#2e7d32', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
+  primaryText: { color: 'white', fontSize: 10, marginLeft: 4 },
+  footerBtns: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
+  refreshBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderWidth: 1, borderColor: '#ddd', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 8 },
+  refreshText: { marginLeft: 8, fontWeight: 'bold', color: '#333' },
+  saveBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#28a745', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 8 },
+  saveText: { marginLeft: 8, fontWeight: 'bold', color: 'white' },
+});
