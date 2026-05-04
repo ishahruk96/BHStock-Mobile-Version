@@ -3,7 +3,7 @@ import { StyleSheet, View, FlatList, TouchableOpacity, TextInput } from "react-n
 import { ThemedText } from "@/components/themed-text";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 
-// ইমেজ অনুযায়ী ১০টি প্রোডাক্ট ডাটা
+
 const productData = [
   { id: "1", category: "Test", name: "Test-02", stock: "100.00", buy: "101.00", sale: "152.00", profit: "5100", status: "Available" },
   { id: "2", category: "w", name: "Virginia Hahn", stock: "50.00", buy: "50.00", sale: "100.00", profit: "2500", status: "Available" },
