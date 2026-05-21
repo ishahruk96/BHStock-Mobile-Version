@@ -5,8 +5,10 @@ import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   SafeAreaView,
   ScrollView,
+  Share,
   StyleSheet,
   TextInput,
   TouchableOpacity,
@@ -15,6 +17,14 @@ import {
 
 const API_KEY = "3A734AC6-A521-4192-984D-08D082B83456";
 const BASE_URL = "http://devmystock.byteheart.com";
+
+const SAVE_API_ENDPOINTS = [
+  "/Stock/SaveAPI",
+  "/api/Stock/SaveAPI",
+  "/SaveAPI",
+  "/products/Stock/SaveAPI",
+  "/api/products/Stock/SaveAPI",
+];
 
 // Helper function for API calls with authentication
 const apiRequest = async (endpoint: string, options: RequestInit = {}) => {
@@ -29,7 +39,9 @@ const apiRequest = async (endpoint: string, options: RequestInit = {}) => {
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errorText}`);
+    throw new Error(
+      `API Error ${response.status}: ${errorText.substring(0, 200)}`,
+    );
   }
 
   return response.json();
@@ -40,7 +52,7 @@ const calculateFIFOProfit = async (
   organizationId: number | null,
   productId: number,
   quantity: number,
-  salesPrice: number
+  salesPrice: number,
 ) => {
   try {
     const data = await apiRequest("/Stock/CalculateFIFOProfit", {
@@ -68,9 +80,57 @@ const calculateFIFOProfit = async (
   }
 };
 
+// Generate print receipt content
+const generateReceipt = (
+  transactionNumber: string,
+  cart: any[],
+  totalAmount: number,
+  paidAmount: number,
+  dueAmount: number,
+  paymentMethod: string,
+  reference: string,
+  customerName: string,
+  customerPhone: string,
+  date: string,
+) => {
+  const receipt = `
+╔════════════════════════════════════╗
+║         SALES RECEIPT              ║
+╠════════════════════════════════════╣
+║ Transaction #: ${transactionNumber}
+║ Date: ${date}
+║ Time: ${new Date().toLocaleTimeString()}
+╠════════════════════════════════════╣
+║ CUSTOMER DETAILS                   ║
+║ Name: ${customerName || "Walk-in Customer"}
+║ Phone: ${customerPhone || "N/A"}
+╠════════════════════════════════════╣
+║ ITEMS                              ║
+${cart
+  .map(
+    (item) => `║ ${item.productName.substring(0, 30)}
+║   Qty: ${item.quantity} × ৳${item.salePrice.toFixed(2)} = ৳${item.total.toFixed(2)}
+║   Profit: ৳${item.profit.toFixed(2)} (${item.profitPercentage.toFixed(1)}%)
+`,
+  )
+  .join("║ ────────────────────────────────\n")}
+╠════════════════════════════════════╣
+║ SUMMARY                            ║
+║ Total Amount: ৳${totalAmount.toFixed(2)}
+║ Payment: ৳${paidAmount.toFixed(2)}
+║ Due: ৳${dueAmount.toFixed(2)}
+║ Payment Method: ${paymentMethod}
+║ Reference: ${reference || "N/A"}
+╠════════════════════════════════════╣
+║         THANK YOU!                 ║
+╚════════════════════════════════════╝
+  `;
+  return receipt;
+};
+
 export default function SingleSalesEntry() {
   const [loading, setLoading] = useState(false);
-  const [categories, setCategories] = useState<string[]>([]); // Direct string array
+  const [categories, setCategories] = useState<string[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<any[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -86,12 +146,12 @@ export default function SingleSalesEntry() {
   const [customerAddress, setCustomerAddress] = useState("");
   const [cart, setCart] = useState<any[]>([]);
   const [loadingProfit, setLoadingProfit] = useState<number | null>(null);
-  const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [organizationId, setOrganizationId] = useState<number | null>(null); // Default organization ID
   const [debugInfo, setDebugInfo] = useState("");
 
   const [date] = useState(() => {
     const today = new Date();
-    return today.toISOString().split('T')[0];
+    return today.toISOString().split("T")[0];
   });
 
   useEffect(() => {
@@ -101,11 +161,12 @@ export default function SingleSalesEntry() {
 
   useEffect(() => {
     if (selectedCategory && products.length > 0) {
-      const filtered = products.filter(
-        (p) => p.Category === selectedCategory
-      );
+      const filtered = products.filter((p) => p.Category === selectedCategory);
       setFilteredProducts(filtered);
-      console.log(`Filtered products for ${selectedCategory}:`, filtered.length);
+      console.log(
+        `Filtered products for ${selectedCategory}:`,
+        filtered.length,
+      );
     } else {
       setFilteredProducts([]);
     }
@@ -128,20 +189,21 @@ export default function SingleSalesEntry() {
 
       let categoriesList: string[] = [];
 
-      // Handle different response formats
       if (Array.isArray(data)) {
-        // Check if array contains strings or objects
-        if (data.length > 0 && typeof data[0] === 'string') {
-          // Direct string array like ["Asthma", "Gastric", ...]
+        if (data.length > 0 && typeof data[0] === "string") {
           categoriesList = data;
-        } else if (data.length > 0 && typeof data[0] === 'object') {
-          // Object array - extract name property
-          categoriesList = data.map((item: any) => 
-            item.name || item.categoryName || item.Name || item.CategoryName || item.title || String(item)
+        } else if (data.length > 0 && typeof data[0] === "object") {
+          categoriesList = data.map(
+            (item: any) =>
+              item.name ||
+              item.categoryName ||
+              item.Name ||
+              item.CategoryName ||
+              item.title ||
+              String(item),
           );
         }
       } else if (data && typeof data === "object") {
-        // Check for common wrapper properties
         if (data.categories && Array.isArray(data.categories)) {
           categoriesList = data.categories;
         } else if (data.data && Array.isArray(data.data)) {
@@ -149,7 +211,6 @@ export default function SingleSalesEntry() {
         } else if (data.result && Array.isArray(data.result)) {
           categoriesList = data.result;
         } else {
-          // Try to find any array property
           for (let key in data) {
             if (Array.isArray(data[key])) {
               categoriesList = data[key];
@@ -161,11 +222,16 @@ export default function SingleSalesEntry() {
 
       console.log("Processed categories:", categoriesList);
       setCategories(categoriesList);
-      setDebugInfo(`Categories loaded: ${categoriesList.length}\n${categoriesList.join(", ")}`);
-      
+      setDebugInfo(
+        `Categories loaded: ${categoriesList.length}\n${categoriesList.join(", ")}`,
+      );
+
       if (categoriesList.length === 0) {
         console.warn("No categories found in response");
-        Alert.alert("Warning", "No categories found. Please check API connection.");
+        Alert.alert(
+          "Warning",
+          "No categories found. Please check API connection.",
+        );
       }
     } catch (error: any) {
       console.error("Error fetching categories:", error);
@@ -185,7 +251,10 @@ export default function SingleSalesEntry() {
 
       console.log("Fetching products from:", url);
       const data = await apiRequest(url);
-      console.log("Products API Response (first item):", JSON.stringify(data?.[0] || data?.data?.[0], null, 2));
+      console.log(
+        "Products API Response (first item):",
+        JSON.stringify(data?.[0] || data?.data?.[0], null, 2),
+      );
 
       let productsList = [];
 
@@ -201,7 +270,9 @@ export default function SingleSalesEntry() {
 
       console.log(`Loaded ${productsList.length} products`);
       setProducts(productsList);
-      setDebugInfo(prev => prev + `\nProducts loaded: ${productsList.length}`);
+      setDebugInfo(
+        (prev) => prev + `\nProducts loaded: ${productsList.length}`,
+      );
     } catch (error: any) {
       console.error("Error fetching products:", error);
       Alert.alert("Error", `Failed to fetch products: ${error.message}`);
@@ -230,25 +301,25 @@ export default function SingleSalesEntry() {
     if (qty > (selectedProduct.CurrentStock || 0)) {
       Alert.alert(
         "Error",
-        `Insufficient stock! Available: ${selectedProduct.CurrentStock}`
+        `Insufficient stock! Available: ${selectedProduct.CurrentStock}`,
       );
       return;
     }
 
     setLoadingProfit(selectedProduct.ProductId);
 
-    // Calculate profit using FIFO API
     const profitData = await calculateFIFOProfit(
       organizationId,
       selectedProduct.ProductId,
       qty,
-      price
+      price,
     );
 
     setLoadingProfit(null);
 
     const total = qty * price;
-    const profit = profitData?.totalProfit || total - qty * (selectedProduct.UnitPrice || 0);
+    const profit =
+      profitData?.totalProfit || total - qty * (selectedProduct.UnitPrice || 0);
     const profitPercentage = profitData?.profitPercentage || 0;
 
     setCart([
@@ -267,7 +338,6 @@ export default function SingleSalesEntry() {
       },
     ]);
 
-    // Reset form
     setSelectedProduct(null);
     setQuantity("");
     setSalePrice("");
@@ -276,7 +346,7 @@ export default function SingleSalesEntry() {
     Alert.alert("Success", "Product added to cart");
   };
 
-  const handleSaveSale = async () => {
+  const saveSale = async (shouldPrint: boolean = false) => {
     if (cart.length === 0) {
       Alert.alert("Error", "Please add at least one product to cart");
       return;
@@ -294,76 +364,165 @@ export default function SingleSalesEntry() {
     if (dueAmount > 0 && (!customerName || !customerPhone)) {
       Alert.alert(
         "Error",
-        "Customer name and phone are required when there's a due amount"
+        "Customer name and phone are required when there's a due amount",
       );
       return;
     }
 
     setLoading(true);
 
-    const saleItems = cart.map((item) => ({
-      productId: item.productId,
-      productName: item.productName,
-      quantity: item.quantity,
-      SalesValue: item.salePrice,
-      unitPrice: item.buyPrice,
-      totalAmount: item.total,
-      profit: item.profit,
-      paymentStatus: "Paid",
-      organizationId: organizationId,
-    }));
-
     const saleData: any = {
-      transactionDate: new Date().toISOString(),
-      dailyExpense: 0,
       TransactionType: "OUT",
-      items: saleItems,
-      organizationId: organizationId,
+      TransactionDate: new Date().toISOString(),
+      Remarks: "",
+      DailyExpense: 0,
+      PaymentStatus: dueAmount > 0 ? "Partial" : "Paid",
+      OrganizationId: organizationId,
       PaymentAmount: paidAmount,
       PaymentMethod: paymentMethod,
-      PaymentReference: reference,
+      PaymentReference: reference || "",
+      Items: cart.map((item) => ({
+        ProductId: item.productId,
+        Quantity: item.quantity,
+        UnitPrice: item.buyPrice,
+        SalesValue: item.salePrice,
+        TotalAmount: item.total,
+        PaymentStatus: dueAmount > 0 ? "Partial" : "Paid",
+        OrganizationId: organizationId,
+      })),
     };
 
-    // Add customer data if provided
     if (customerName || customerPhone || customerEmail || customerAddress) {
-      if (!customerPhone) {
-        Alert.alert("Error", "Phone number is required when providing customer info");
-        setLoading(false);
-        return;
-      }
-      saleData.customer = {
-        customerName: customerName || "",
-        phoneNumber: customerPhone,
-        email: customerEmail || "",
-        address: customerAddress || "",
+      saleData.Customer = {
+        CustomerName: customerName || "",
+        PhoneNumber: customerPhone || "",
+        Email: customerEmail || "",
+        Address: customerAddress || "",
       };
     }
 
     try {
-      const response = await apiRequest("/Stock/SaveAPI", {
-        method: "POST",
-        body: JSON.stringify(saleData),
-      });
+      let responseData = null;
+      let lastError = null;
 
-      if (response.Success) {
-        let successMessage = `Sales saved successfully!\nTransaction: #${response.TransactionNumber || ""}`;
+      // বিভিন্ন endpoint试试 করুন
+      for (const endpoint of SAVE_API_ENDPOINTS) {
+        try {
+          console.log(`Trying endpoint: ${endpoint}`);
+          const response = await fetch(`${BASE_URL}${endpoint}`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(saleData),
+          });
+
+          if (response.ok) {
+            responseData = await response.json();
+            console.log(`Success with endpoint: ${endpoint}`);
+            break;
+          } else {
+            console.log(`Failed with endpoint ${endpoint}: ${response.status}`);
+            lastError = new Error(`HTTP ${response.status}`);
+          }
+        } catch (error) {
+          console.log(`Error with endpoint ${endpoint}:`, error);
+          lastError = error;
+        }
+      }
+
+      if (responseData && (responseData.Success || responseData.success)) {
+        const transactionNumber =
+          responseData.TransactionNumber ||
+          responseData.transactionNumber ||
+          `INV-${Date.now()}`;
+
+        let successMessage = `Sales saved successfully!\nTransaction: #${transactionNumber}`;
         if (dueAmount > 0) {
           successMessage += `\nDue Amount: ৳${dueAmount.toFixed(2)}`;
         }
+
         Alert.alert("Success", successMessage, [
-          { text: "OK", onPress: () => resetForm() },
+          {
+            text: "OK",
+            onPress: () => {
+              if (shouldPrint) {
+                handlePrintReceipt(transactionNumber);
+              }
+              resetForm();
+            },
+          },
         ]);
       } else {
-        Alert.alert("Error", response.message || "Failed to save sale");
+        throw lastError || new Error("Failed to save sale with all endpoints");
       }
     } catch (error: any) {
       console.error("Save error:", error);
-      Alert.alert("Error", `Failed to save sale: ${error.message}`);
+      Alert.alert(
+        "Error",
+        `Failed to save sale. Please check:\n\n` +
+          `1. Server is running\n` +
+          `2. API endpoint is correct\n` +
+          `3. Network connection\n\n` +
+          `Error: ${error.message}`,
+      );
     } finally {
       setLoading(false);
     }
   };
 
+  const handlePrintReceipt = async (transactionNumber: string) => {
+    const totalAmount = cart.reduce((sum, item) => sum + item.total, 0);
+    const paidAmount = parseFloat(paymentAmount) || 0;
+    const dueAmount = totalAmount - paidAmount;
+
+    const receipt = generateReceipt(
+      transactionNumber,
+      cart,
+      totalAmount,
+      paidAmount,
+      dueAmount,
+      paymentMethod,
+      reference,
+      customerName,
+      customerPhone,
+      date,
+    );
+
+    if (Platform.OS === "web") {
+      const printWindow = window.open("", "_blank");
+      if (printWindow) {
+        printWindow.document.write(`
+        <html>
+          <head>
+            <title>Sales Receipt</title>
+            <style>
+              body { font-family: monospace; padding: 20px; }
+              pre { font-size: 14px; }
+            </style>
+          </head>
+          <body>
+            <pre>${receipt}</pre>
+            <script>window.print();<\/script>
+          </body>
+        </html>
+      `);
+        printWindow.document.close();
+      }
+    } else {
+      try {
+        await Share.share({
+          message: receipt,
+          title: "Sales Receipt",
+        });
+      } catch (error) {
+        console.error("Error sharing receipt:", error);
+      }
+    }
+  };
+
+  // রিসেট ফাংশন (আগের মতোই)
   const resetForm = () => {
     setCart([]);
     setSelectedProduct(null);
@@ -379,6 +538,15 @@ export default function SingleSalesEntry() {
     setCustomerAddress("");
   };
 
+  // এই হ্যান্ডলারগুলি আগের মতোই থাকবে
+  const handleSaveSale = () => {
+    saveSale(false);
+  };
+
+  const handleSaveAndPrint = () => {
+    saveSale(true);
+  };
+
   const totalAmount = cart.reduce((sum, item) => sum + item.total, 0);
   const totalPaid = parseFloat(paymentAmount) || 0;
   const dueAmount = totalAmount - totalPaid;
@@ -389,7 +557,11 @@ export default function SingleSalesEntry() {
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#28A745" />
           <ThemedText style={{ marginTop: 10 }}>Loading...</ThemedText>
-          {debugInfo ? <ThemedText style={{ fontSize: 10, marginTop: 20, color: '#666' }}>{debugInfo}</ThemedText> : null}
+          {debugInfo ? (
+            <ThemedText style={{ fontSize: 10, marginTop: 20, color: "#666" }}>
+              {debugInfo}
+            </ThemedText>
+          ) : null}
         </View>
       </SafeAreaView>
     );
@@ -408,7 +580,6 @@ export default function SingleSalesEntry() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollBody}>
-        
         {/* Date Section */}
         <View style={styles.sectionCard}>
           <ThemedText style={styles.label}>Date *</ThemedText>
@@ -426,7 +597,8 @@ export default function SingleSalesEntry() {
             />
           </View>
           <ThemedText style={styles.noteText}>
-            Note: Select category and product from dropdowns. Enter quantity to calculate totals.
+            Note: Select category and product from dropdowns. Enter quantity to
+            calculate totals.
           </ThemedText>
         </View>
 
@@ -467,12 +639,12 @@ export default function SingleSalesEntry() {
                   selectedValue={selectedProduct?.ProductId}
                   onValueChange={(itemValue) => {
                     const product = filteredProducts.find(
-                      (p) => p.ProductId === itemValue
+                      (p) => p.ProductId === itemValue,
                     );
                     setSelectedProduct(product);
                     if (product) {
                       setSalePrice(
-                        String(product.SalesValue || product.UnitPrice || 0)
+                        String(product.SalesValue || product.UnitPrice || 0),
                       );
                     }
                     setQuantity("");
@@ -548,20 +720,31 @@ export default function SingleSalesEntry() {
                     <ThemedText style={styles.label}>Total</ThemedText>
                     <TextInput
                       style={[styles.input, styles.disabledInput]}
-                      value={(parseFloat(quantity) * parseFloat(salePrice)).toFixed(2)}
+                      value={(
+                        parseFloat(quantity) * parseFloat(salePrice)
+                      ).toFixed(2)}
                       editable={false}
                     />
                   </View>
                   <View style={{ flex: 1 }}>
                     <ThemedText style={styles.label}>Profit</ThemedText>
                     {loadingProfit === selectedProduct.ProductId ? (
-                      <ActivityIndicator size="small" color="#28A745" style={{ marginTop: 10 }} />
+                      <ActivityIndicator
+                        size="small"
+                        color="#28A745"
+                        style={{ marginTop: 10 }}
+                      />
                     ) : (
                       <TextInput
-                        style={[styles.input, styles.disabledInput, styles.profitInput]}
+                        style={[
+                          styles.input,
+                          styles.disabledInput,
+                          styles.profitInput,
+                        ]}
                         value={(
                           parseFloat(quantity) * parseFloat(salePrice) -
-                          parseFloat(quantity) * (selectedProduct.UnitPrice || 0)
+                          parseFloat(quantity) *
+                            (selectedProduct.UnitPrice || 0)
                         ).toFixed(2)}
                         editable={false}
                       />
@@ -611,7 +794,8 @@ export default function SingleSalesEntry() {
                         : styles.profitNegative,
                     ]}
                   >
-                    Profit: ৳{item.profit.toFixed(2)} ({item.profitPercentage.toFixed(1)}%)
+                    Profit: ৳{item.profit.toFixed(2)} (
+                    {item.profitPercentage.toFixed(1)}%)
                   </ThemedText>
                 </View>
                 <TouchableOpacity
@@ -675,7 +859,10 @@ export default function SingleSalesEntry() {
             style={[
               styles.input,
               styles.disabledInput,
-              { color: dueAmount > 0 ? "#DC3545" : "#28A745", fontWeight: "bold" },
+              {
+                color: dueAmount > 0 ? "#DC3545" : "#28A745",
+                fontWeight: "bold",
+              },
             ]}
             value={`${dueAmount.toFixed(2)} ৳`}
             editable={false}
@@ -751,14 +938,11 @@ export default function SingleSalesEntry() {
             <ThemedText style={styles.btnText}>Clear All</ThemedText>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: "#17A2B8", flex: 1.5 }]}
-            onPress={() => {
-              if (cart.length === 0) {
-                Alert.alert("Error", "Please add at least one product to cart");
-                return;
-              }
-              handleSaveSale();
-            }}
+            style={[
+              styles.actionBtn,
+              { backgroundColor: "#17A2B8", flex: 1.5 },
+            ]}
+            onPress={handleSaveAndPrint}
           >
             <ThemedText style={styles.btnText}>Save & Print</ThemedText>
           </TouchableOpacity>

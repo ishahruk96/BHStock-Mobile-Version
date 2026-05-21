@@ -1,28 +1,28 @@
-import React, { useState, useEffect, useCallback } from "react";
-import {
-  StyleSheet,
-  View,
-  FlatList,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-  RefreshControl,
-  ScrollView,
-  Dimensions,
-  Alert,
-  Modal,
-  TouchableWithoutFeedback,
-} from "react-native";
+// sales_list.tsx
 import { ThemedText } from "@/components/themed-text";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { useRouter } from "expo-router";
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  FlatList,
+  Modal,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  View,
+} from "react-native";
 
 const { width, height } = Dimensions.get("window");
 
-// API Configuration
 const API_KEY = "3A734AC6-A521-4192-984D-08D082B83456";
 const API_URL = "http://devmystock.byteheart.com/Stock/GetTransactionsFilter";
 
-// Transaction interface
 interface Transaction {
   TransactionId: number;
   ProductId: number;
@@ -61,23 +61,27 @@ interface Transaction {
   IsAvailableForExchange: boolean;
 }
 
-// Format date
+// ─── Pure helper functions ─────────────────────────────────────────
+
 const formatDate = (dateString: string): string => {
   try {
     if (!dateString) return "N/A";
     const match = dateString.match(/\/Date\((\d+)\)\//);
     if (match) {
-      const timestamp = parseInt(match[1]);
-      const date = new Date(timestamp);
-      return date.toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-      }) + " " + date.toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true
-      });
+      const date = new Date(parseInt(match[1]));
+      return (
+        date.toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        }) +
+        " " +
+        date.toLocaleTimeString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: true,
+        })
+      );
     }
     return dateString;
   } catch {
@@ -85,69 +89,51 @@ const formatDate = (dateString: string): string => {
   }
 };
 
-// Format date for display
 const formatDateForPicker = (date: Date): string => {
   const day = date.getDate().toString().padStart(2, "0");
   const month = (date.getMonth() + 1).toString().padStart(2, "0");
-  const year = date.getFullYear();
-  return `${day}/${month}/${year}`;
+  return `${day}/${month}/${date.getFullYear()}`;
 };
 
-// Parse date string to Date object
 const parseDateString = (dateStr: string): Date | null => {
   if (!dateStr) return null;
   const parts = dateStr.split("/");
   if (parts.length === 3) {
-    const day = parseInt(parts[0]);
-    const month = parseInt(parts[1]) - 1;
-    const year = parseInt(parts[2]);
-    return new Date(year, month, day);
+    return new Date(
+      parseInt(parts[2]),
+      parseInt(parts[1]) - 1,
+      parseInt(parts[0]),
+    );
   }
   return null;
 };
 
-// Helper function to get today's date at start of day
-const getStartOfToday = (): Date => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today;
-};
-
-// Helper function to check if a transaction is from today
-const isToday = (transactionDate: string): boolean => {
-  const parsedDate = parseDateFromJson(transactionDate);
-  if (!parsedDate) return false;
-  
-  const today = getStartOfToday();
-  const transactionDay = new Date(parsedDate);
-  transactionDay.setHours(0, 0, 0, 0);
-  
-  return transactionDay.getTime() === today.getTime();
-};
-
-// Parse date from JSON format
 const parseDateFromJson = (dateString: string): Date | null => {
   try {
     if (!dateString) return null;
     const match = dateString.match(/\/Date\((\d+)\)\//);
-    if (match) {
-      const timestamp = parseInt(match[1]);
-      return new Date(timestamp);
-    }
-    return new Date(dateString);
+    return match ? new Date(parseInt(match[1])) : new Date(dateString);
   } catch {
     return null;
   }
 };
 
-// Get date range based on preset
+const isToday = (transactionDate: string): boolean => {
+  const parsed = parseDateFromJson(transactionDate);
+  if (!parsed) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const txDay = new Date(parsed);
+  txDay.setHours(0, 0, 0, 0);
+  return txDay.getTime() === today.getTime();
+};
+
 const getDateRange = (preset: string): { start: Date; end: Date } => {
   const end = new Date();
   end.setHours(23, 59, 59, 999);
   const start = new Date();
   start.setHours(0, 0, 0, 0);
-  
-  switch(preset) {
+  switch (preset) {
     case "7days":
       start.setDate(start.getDate() - 6);
       break;
@@ -160,19 +146,245 @@ const getDateRange = (preset: string): { start: Date; end: Date } => {
     case "3months":
       start.setMonth(start.getMonth() - 3);
       break;
-    default:
-      return { start, end };
   }
-  
   return { start, end };
 };
 
+const getStatusStyle = (status: string) => {
+  if (!status) return { bg: "#f0f0f0", text: "#666" };
+  switch (status.toLowerCase()) {
+    case "paid":
+      return { bg: "#d4edda", text: "#155724" };
+    case "partial":
+      return { bg: "#fff3cd", text: "#856404" };
+    case "unpaid":
+      return { bg: "#f8d7da", text: "#721c24" };
+    default:
+      return { bg: "#f0f0f0", text: "#666" };
+  }
+};
+
+// ─── Filter Modal ────────────────────────────────────────────────
+
+interface FilterModalProps {
+  visible: boolean;
+  onClose: () => void;
+  categories: string[];
+  tempSelectedCategory: string;
+  setTempSelectedCategory: (v: string) => void;
+  tempSelectedStatus: string;
+  setTempSelectedStatus: (v: string) => void;
+  tempStartDate: string;
+  tempEndDate: string;
+  tempDatePreset: string;
+  onDatePreset: (preset: string) => void;
+  onStartDatePress: () => void;
+  onEndDatePress: () => void;
+  onReset: () => void;
+  onShowAll: () => void;
+  onApply: () => void;
+}
+
+const FilterModal = ({
+  visible,
+  onClose,
+  categories,
+  tempSelectedCategory,
+  setTempSelectedCategory,
+  tempSelectedStatus,
+  setTempSelectedStatus,
+  tempStartDate,
+  tempEndDate,
+  tempDatePreset,
+  onDatePreset,
+  onStartDatePress,
+  onEndDatePress,
+  onReset,
+  onShowAll,
+  onApply,
+}: FilterModalProps) => (
+  <Modal
+    animationType="slide"
+    transparent={true}
+    visible={visible}
+    onRequestClose={onClose}
+  >
+    <TouchableWithoutFeedback onPress={onClose}>
+      <View style={styles.modalOverlay}>
+        <TouchableWithoutFeedback onPress={(e) => e.stopPropagation()}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <ThemedText style={styles.modalHeaderTitle}>
+                Filter Options
+              </ThemedText>
+              <TouchableOpacity onPress={onClose}>
+                <ThemedText style={styles.modalClose}>✕</ThemedText>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody}>
+              {/* Category */}
+              <View style={styles.filterGroup}>
+                <ThemedText style={styles.filterLabel}>Category</ThemedText>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View style={styles.filterOptions}>
+                    <TouchableOpacity
+                      style={[
+                        styles.filterOption,
+                        !tempSelectedCategory && styles.filterOptionActive,
+                      ]}
+                      onPress={() => setTempSelectedCategory("")}
+                    >
+                      <ThemedText
+                        style={[
+                          styles.filterOptionText,
+                          !tempSelectedCategory &&
+                            styles.filterOptionTextActive,
+                        ]}
+                      >
+                        All
+                      </ThemedText>
+                    </TouchableOpacity>
+                    {categories.map((cat) => (
+                      <TouchableOpacity
+                        key={cat}
+                        style={[
+                          styles.filterOption,
+                          tempSelectedCategory === cat &&
+                            styles.filterOptionActive,
+                        ]}
+                        onPress={() => setTempSelectedCategory(cat)}
+                      >
+                        <ThemedText
+                          style={[
+                            styles.filterOptionText,
+                            tempSelectedCategory === cat &&
+                              styles.filterOptionTextActive,
+                          ]}
+                        >
+                          {cat}
+                        </ThemedText>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
+
+              {/* Payment Status */}
+              <View style={styles.filterGroup}>
+                <ThemedText style={styles.filterLabel}>
+                  Payment Status
+                </ThemedText>
+                <View style={styles.filterOptions}>
+                  {["", "Paid", "Partial", "Unpaid"].map((status) => (
+                    <TouchableOpacity
+                      key={status || "all"}
+                      style={[
+                        styles.filterOption,
+                        tempSelectedStatus === status &&
+                          styles.filterOptionActive,
+                      ]}
+                      onPress={() => setTempSelectedStatus(status)}
+                    >
+                      <ThemedText
+                        style={[
+                          styles.filterOptionText,
+                          tempSelectedStatus === status &&
+                            styles.filterOptionTextActive,
+                        ]}
+                      >
+                        {status || "All"}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Quick Date Range */}
+              <View style={styles.filterGroup}>
+                <ThemedText style={styles.filterLabel}>
+                  Quick Date Range
+                </ThemedText>
+                <View style={styles.filterOptions}>
+                  {[
+                    { key: "7days", label: "Last 7 Days" },
+                    { key: "15days", label: "Last 15 Days" },
+                    { key: "30days", label: "Last 30 Days" },
+                    { key: "3months", label: "Last 3 Months" },
+                  ].map(({ key, label }) => (
+                    <TouchableOpacity
+                      key={key}
+                      style={[
+                        styles.filterOption,
+                        tempDatePreset === key && styles.filterOptionActive,
+                      ]}
+                      onPress={() => onDatePreset(key)}
+                    >
+                      <ThemedText
+                        style={[
+                          styles.filterOptionText,
+                          tempDatePreset === key &&
+                            styles.filterOptionTextActive,
+                        ]}
+                      >
+                        {label}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Custom Date Range */}
+              <View style={styles.filterGroup}>
+                <ThemedText style={styles.filterLabel}>
+                  Custom Date Range
+                </ThemedText>
+                <View style={styles.dateRangeContainer}>
+                  <TouchableOpacity
+                    style={styles.datePickerButton}
+                    onPress={onStartDatePress}
+                  >
+                    <ThemedText style={styles.datePickerButtonText}>
+                      {tempStartDate || "Select Start Date"}
+                    </ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.datePickerButton}
+                    onPress={onEndDatePress}
+                  >
+                    <ThemedText style={styles.datePickerButtonText}>
+                      {tempEndDate || "Select End Date"}
+                    </ThemedText>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </ScrollView>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.resetAllBtn} onPress={onReset}>
+                <ThemedText style={styles.resetAllBtnText}>Reset</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.showAllBtn} onPress={onShowAll}>
+                <ThemedText style={styles.showAllBtnText}>All Data</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.applyFilterBtn} onPress={onApply}>
+                <ThemedText style={styles.applyFilterBtnText}>Apply</ThemedText>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </View>
+    </TouchableWithoutFeedback>
+  </Modal>
+);
+
+// ─── Main Screen ─────────────────────────────────────────────────
+
 export default function SalesListScreen() {
+  const router = useRouter();
+
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [filteredTransactions, setFilteredTransactions] = useState<
-    Transaction[]
-  >([]);
-  const [originalTransactions, setOriginalTransactions] = useState<
     Transaction[]
   >([]);
   const [loading, setLoading] = useState(true);
@@ -180,15 +392,14 @@ export default function SalesListScreen() {
   const [error, setError] = useState<string | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
 
-  // Filter states (temporary for modal - no reload on change)
-  const [tempSearchText, setTempSearchText] = useState("");
+  // Temp filter states
   const [tempSelectedCategory, setTempSelectedCategory] = useState("");
   const [tempSelectedStatus, setTempSelectedStatus] = useState("");
   const [tempStartDate, setTempStartDate] = useState("");
   const [tempEndDate, setTempEndDate] = useState("");
   const [tempDatePreset, setTempDatePreset] = useState("");
 
-  // Applied filter states (only updates when Apply is clicked)
+  // Applied filter states
   const [appliedSearchText, setAppliedSearchText] = useState("");
   const [appliedSelectedCategory, setAppliedSelectedCategory] = useState("");
   const [appliedSelectedStatus, setAppliedSelectedStatus] = useState("");
@@ -200,7 +411,6 @@ export default function SalesListScreen() {
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
 
-  // Summary States
   const [summary, setSummary] = useState({
     totalTxn: 0,
     totalQty: 0,
@@ -214,7 +424,6 @@ export default function SalesListScreen() {
     fetchTransactions();
   }, []);
 
-  // Apply filters only when applied states change
   useEffect(() => {
     applyFilters();
   }, [
@@ -237,59 +446,43 @@ export default function SalesListScreen() {
           "Content-Type": "application/json",
         },
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       const data = await response.json();
+      let transactionsData: Transaction[] = [];
 
-      if (data && typeof data === "object") {
-        let transactionsData: Transaction[] = [];
-
-        if (Array.isArray(data)) {
-          transactionsData = data;
-        } else if (data.data && Array.isArray(data.data)) {
-          transactionsData = data.data;
-        } else if (data.result && Array.isArray(data.result)) {
-          transactionsData = data.result;
-        } else if (data.items && Array.isArray(data.items)) {
-          transactionsData = data.items;
-        } else {
-          for (let key in data) {
-            if (Array.isArray(data[key])) {
-              transactionsData = data[key];
-              break;
-            }
+      if (Array.isArray(data)) transactionsData = data;
+      else if (data.data && Array.isArray(data.data))
+        transactionsData = data.data;
+      else if (data.result && Array.isArray(data.result))
+        transactionsData = data.result;
+      else if (data.items && Array.isArray(data.items))
+        transactionsData = data.items;
+      else
+        for (let key in data) {
+          if (Array.isArray(data[key])) {
+            transactionsData = data[key];
+            break;
           }
         }
 
-        if (transactionsData && transactionsData.length > 0) {
-          setTransactions(transactionsData);
-          setOriginalTransactions(transactionsData);
-          
-          // Filter to show only today's data by default
-          const todayTransactions = transactionsData.filter(item => isToday(item.TransactionDate));
-          setFilteredTransactions(todayTransactions);
-          calculateSummary(todayTransactions);
-
-          const uniqueCategories = [
-            ...new Set(
-              transactionsData
-                .map((item) => item.Category)
-                .filter((cat) => cat && cat !== ""),
-            ),
-          ];
-          setCategories(uniqueCategories);
-        } else {
-          setTransactions([]);
-          setFilteredTransactions([]);
-        }
+      if (transactionsData.length > 0) {
+        setTransactions(transactionsData);
+        const todayTxns = transactionsData.filter((item) =>
+          isToday(item.TransactionDate),
+        );
+        setFilteredTransactions(todayTxns);
+        calculateSummary(todayTxns);
+        setCategories([
+          ...new Set(transactionsData.map((i) => i.Category).filter(Boolean)),
+        ]);
+      } else {
+        setTransactions([]);
+        setFilteredTransactions([]);
       }
-    } catch (error: any) {
-      console.error("Fetch Error:", error);
-      setError(error.message || "Failed to fetch transactions");
-      Alert.alert("Error", `Failed to load data: ${error.message}`);
+    } catch (err: any) {
+      setError(err.message || "Failed to fetch transactions");
+      Alert.alert("Error", `Failed to load data: ${err.message}`);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -297,83 +490,59 @@ export default function SalesListScreen() {
   };
 
   const calculateSummary = (data: Transaction[]) => {
-    const totalQty = data.reduce((sum, item) => sum + (item.Quantity || 0), 0);
+    const totalQty = data.reduce((s, i) => s + (i.Quantity || 0), 0);
     const totalAmount = data.reduce(
-      (sum, item) =>
-        sum + (item.SalesValue || item.TotalAmount || item.Amount || 0),
+      (s, i) => s + (i.SalesValue || i.TotalAmount || i.Amount || 0),
       0,
     );
     const totalProfit = data.reduce(
-      (sum, item) => sum + (item.ProfitPerUnit || 0) * (item.Quantity || 0),
+      (s, i) => s + (i.ProfitPerUnit || 0) * (i.Quantity || 0),
       0,
     );
-    const totalDue = data.reduce((sum, item) => sum + (item.DueAmount || 0), 0);
-    const avgProfitMargin =
-      totalAmount > 0 ? (totalProfit / totalAmount) * 100 : 0;
-
+    const totalDue = data.reduce((s, i) => s + (i.DueAmount || 0), 0);
     setSummary({
       totalTxn: data.length,
       totalQty,
       totalAmount,
       totalProfit,
       totalDue,
-      avgProfitMargin,
+      avgProfitMargin: totalAmount > 0 ? (totalProfit / totalAmount) * 100 : 0,
     });
   };
 
   const applyFilters = () => {
     let filtered = [...transactions];
 
-    // Only apply filters if not showing all history
     if (!appliedShowAllHistory) {
-      // Search filter
       if (appliedSearchText) {
+        const q = appliedSearchText.toLowerCase();
         filtered = filtered.filter(
-          (item) =>
-            (item.ProductName &&
-              item.ProductName.toLowerCase().includes(
-                appliedSearchText.toLowerCase(),
-              )) ||
-            (item.TransactionNumber &&
-              item.TransactionNumber.toLowerCase().includes(
-                appliedSearchText.toLowerCase(),
-              )) ||
-            (item.CustomerName &&
-              item.CustomerName.toLowerCase().includes(
-                appliedSearchText.toLowerCase(),
-              )),
+          (i) =>
+            i.ProductName?.toLowerCase().includes(q) ||
+            i.TransactionNumber?.toLowerCase().includes(q) ||
+            i.CustomerName?.toLowerCase().includes(q),
         );
       }
-
-      // Category filter
-      if (appliedSelectedCategory) {
+      if (appliedSelectedCategory)
         filtered = filtered.filter(
-          (item) => item.Category === appliedSelectedCategory,
+          (i) => i.Category === appliedSelectedCategory,
         );
-      }
-
-      // Status filter
-      if (appliedSelectedStatus) {
+      if (appliedSelectedStatus)
         filtered = filtered.filter(
-          (item) => item.PaymentStatus === appliedSelectedStatus,
+          (i) => i.PaymentStatus === appliedSelectedStatus,
         );
-      }
 
-      // Date range filter
       if (appliedStartDate && appliedEndDate) {
-        filtered = filtered.filter((item) => {
-          const itemDateObj = parseDateFromJson(item.TransactionDate);
-          if (!itemDateObj) return false;
-          
-          const [startDay, startMonth, startYear] = appliedStartDate.split("/");
-          const startDateObj = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
-          startDateObj.setHours(0, 0, 0, 0);
-          
-          const [endDay, endMonth, endYear] = appliedEndDate.split("/");
-          const endDateObj = new Date(parseInt(endYear), parseInt(endMonth) - 1, parseInt(endDay));
-          endDateObj.setHours(23, 59, 59, 999);
-          
-          return itemDateObj >= startDateObj && itemDateObj <= endDateObj;
+        filtered = filtered.filter((i) => {
+          const d = parseDateFromJson(i.TransactionDate);
+          if (!d) return false;
+          const [sd, sm, sy] = appliedStartDate.split("/");
+          const [ed, em, ey] = appliedEndDate.split("/");
+          const start = new Date(+sy, +sm - 1, +sd);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(+ey, +em - 1, +ed);
+          end.setHours(23, 59, 59, 999);
+          return d >= start && d <= end;
         });
       }
     }
@@ -382,368 +551,75 @@ export default function SalesListScreen() {
     calculateSummary(filtered);
   };
 
-  const handleDatePreset = (preset: string) => {
+  const handleDatePreset = useCallback((preset: string) => {
     const { start, end } = getDateRange(preset);
     setTempStartDate(formatDateForPicker(start));
     setTempEndDate(formatDateForPicker(end));
     setTempDatePreset(preset);
-  };
+  }, []);
 
-  const applyModalFilters = () => {
-    // Only update applied states when Apply is clicked
-    setAppliedSearchText(tempSearchText);
+  const applyModalFilters = useCallback(() => {
+    setAppliedSearchText("");
     setAppliedSelectedCategory(tempSelectedCategory);
     setAppliedSelectedStatus(tempSelectedStatus);
     setAppliedStartDate(tempStartDate);
     setAppliedEndDate(tempEndDate);
     setAppliedShowAllHistory(false);
     setShowFilterModal(false);
-  };
+  }, [tempSelectedCategory, tempSelectedStatus, tempStartDate, tempEndDate]);
 
-  const resetFilters = () => {
-    // Reset temporary states
-    setTempSearchText("");
+  const resetFilters = useCallback(() => {
     setTempSelectedCategory("");
     setTempSelectedStatus("");
     setTempStartDate("");
     setTempEndDate("");
     setTempDatePreset("");
-    
-    // Reset applied states
     setAppliedSearchText("");
     setAppliedSelectedCategory("");
     setAppliedSelectedStatus("");
     setAppliedStartDate("");
     setAppliedEndDate("");
     setAppliedShowAllHistory(false);
-    
     setShowFilterModal(false);
-  };
+  }, []);
 
-  const showAllData = () => {
-    // Reset all temporary states
-    setTempSearchText("");
+  const showAllData = useCallback(() => {
     setTempSelectedCategory("");
     setTempSelectedStatus("");
     setTempStartDate("");
     setTempEndDate("");
     setTempDatePreset("");
-    
-    // Set applied states to show all data
     setAppliedSearchText("");
     setAppliedSelectedCategory("");
     setAppliedSelectedStatus("");
     setAppliedStartDate("");
     setAppliedEndDate("");
     setAppliedShowAllHistory(true);
-    
     setShowFilterModal(false);
-  };
+  }, []);
 
-  const getStatusStyle = (status: string) => {
-    if (!status) return { bg: "#f0f0f0", text: "#666" };
-    switch (status.toLowerCase()) {
-      case "paid":
-        return { bg: "#d4edda", text: "#155724" };
-      case "partial":
-        return { bg: "#fff3cd", text: "#856404" };
-      case "unpaid":
-        return { bg: "#f8d7da", text: "#721c24" };
-      default:
-        return { bg: "#f0f0f0", text: "#666" };
-    }
-  };
+  const handleStartDatePress = useCallback(
+    () => setShowStartDatePicker(true),
+    [],
+  );
+  const handleEndDatePress = useCallback(() => setShowEndDatePicker(true), []);
+  const handleCloseModal = useCallback(() => setShowFilterModal(false), []);
 
-  const FilterModal = () => (
-    <Modal
-      animationType="slide"
-      transparent={true}
-      visible={showFilterModal}
-      onRequestClose={() => setShowFilterModal(false)}
-    >
-      <TouchableWithoutFeedback onPress={() => setShowFilterModal(true)}>
-        <View style={styles.modalOverlay}>
-          <TouchableWithoutFeedback onPress={(e) => e.stopPropagation()}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <ThemedText style={styles.modalHeaderTitle}>
-                  Filter Options
-                </ThemedText>
-                <TouchableOpacity onPress={() => setShowFilterModal(false)}>
-                  <ThemedText style={styles.modalClose}>✕</ThemedText>
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView style={styles.modalBody}>
-                {/* Search */}
-                {/* <View style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Search</ThemedText>
-                  <TextInput
-                    style={styles.searchInputModal}
-                    placeholder="Search by product, invoice or customer..."
-                    placeholderTextColor="#999"
-                    value={tempSearchText}
-                    onChangeText={setTempSearchText}
-                  />
-                </View> */}
-
-                {/* Category Selection */}
-                <View style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Category</ThemedText>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    <View style={styles.filterOptions}>
-                      <TouchableOpacity
-                        style={[
-                          styles.filterOption,
-                          !tempSelectedCategory && styles.filterOptionActive,
-                        ]}
-                        onPress={() => setTempSelectedCategory("")}
-                      >
-                        <ThemedText
-                          style={[
-                            styles.filterOptionText,
-                            !tempSelectedCategory &&
-                              styles.filterOptionTextActive,
-                          ]}
-                        >
-                          All
-                        </ThemedText>
-                      </TouchableOpacity>
-                      {categories.map((cat) => (
-                        <TouchableOpacity
-                          key={cat}
-                          style={[
-                            styles.filterOption,
-                            tempSelectedCategory === cat &&
-                              styles.filterOptionActive,
-                          ]}
-                          onPress={() => setTempSelectedCategory(cat)}
-                        >
-                          <ThemedText
-                            style={[
-                              styles.filterOptionText,
-                              tempSelectedCategory === cat &&
-                                styles.filterOptionTextActive,
-                            ]}
-                          >
-                            {cat}
-                          </ThemedText>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </ScrollView>
-                </View>
-
-                {/* Status Selection */}
-                <View style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>
-                    Payment Status
-                  </ThemedText>
-                  <View style={styles.filterOptions}>
-                    <TouchableOpacity
-                      style={[
-                        styles.filterOption,
-                        !tempSelectedStatus && styles.filterOptionActive,
-                      ]}
-                      onPress={() => setTempSelectedStatus("")}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.filterOptionText,
-                          !tempSelectedStatus && styles.filterOptionTextActive,
-                        ]}
-                      >
-                        All
-                      </ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.filterOption,
-                        tempSelectedStatus === "Paid" &&
-                          styles.filterOptionActive,
-                      ]}
-                      onPress={() => setTempSelectedStatus("Paid")}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.filterOptionText,
-                          tempSelectedStatus === "Paid" &&
-                            styles.filterOptionTextActive,
-                        ]}
-                      >
-                        Paid
-                      </ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.filterOption,
-                        tempSelectedStatus === "Partial" &&
-                          styles.filterOptionActive,
-                      ]}
-                      onPress={() => setTempSelectedStatus("Partial")}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.filterOptionText,
-                          tempSelectedStatus === "Partial" &&
-                            styles.filterOptionTextActive,
-                        ]}
-                      >
-                        Partial
-                      </ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.filterOption,
-                        tempSelectedStatus === "Unpaid" &&
-                          styles.filterOptionActive,
-                      ]}
-                      onPress={() => setTempSelectedStatus("Unpaid")}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.filterOptionText,
-                          tempSelectedStatus === "Unpaid" &&
-                            styles.filterOptionTextActive,
-                        ]}
-                      >
-                        Unpaid
-                      </ThemedText>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* Date Range Presets */}
-                <View style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Quick Date Range</ThemedText>
-                  <View style={styles.filterOptions}>
-                    <TouchableOpacity
-                      style={[
-                        styles.filterOption,
-                        tempDatePreset === "7days" && styles.filterOptionActive,
-                      ]}
-                      onPress={() => handleDatePreset("7days")}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.filterOptionText,
-                          tempDatePreset === "7days" && styles.filterOptionTextActive,
-                        ]}
-                      >
-                        Last 7 Days
-                      </ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.filterOption,
-                        tempDatePreset === "15days" && styles.filterOptionActive,
-                      ]}
-                      onPress={() => handleDatePreset("15days")}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.filterOptionText,
-                          tempDatePreset === "15days" && styles.filterOptionTextActive,
-                        ]}
-                      >
-                        Last 15 Days
-                      </ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.filterOption,
-                        tempDatePreset === "30days" && styles.filterOptionActive,
-                      ]}
-                      onPress={() => handleDatePreset("30days")}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.filterOptionText,
-                          tempDatePreset === "30days" && styles.filterOptionTextActive,
-                        ]}
-                      >
-                        Last 30 Days
-                      </ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.filterOption,
-                        tempDatePreset === "3months" && styles.filterOptionActive,
-                      ]}
-                      onPress={() => handleDatePreset("3months")}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.filterOptionText,
-                          tempDatePreset === "3months" && styles.filterOptionTextActive,
-                        ]}
-                      >
-                        Last 3 Months
-                      </ThemedText>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* Date Range */}
-                <View style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Custom Date Range</ThemedText>
-                  <View style={styles.dateRangeContainer}>
-                    <TouchableOpacity
-                      style={styles.datePickerButton}
-                      onPress={() => setShowStartDatePicker(true)}
-                    >
-                      <ThemedText style={styles.datePickerButtonText}>
-                        {tempStartDate || "Select Start Date"}
-                      </ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.datePickerButton}
-                      onPress={() => setShowEndDatePicker(true)}
-                    >
-                      <ThemedText style={styles.datePickerButtonText}>
-                        {tempEndDate || "Select End Date"}
-                      </ThemedText>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </ScrollView>
-
-              <View style={styles.modalFooter}>
-                <TouchableOpacity
-                  style={styles.resetAllBtn}
-                  onPress={resetFilters}
-                >
-                  <ThemedText style={styles.resetAllBtnText}>Reset</ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.showAllBtn}
-                  onPress={showAllData}
-                >
-                  <ThemedText style={styles.showAllBtnText}>
-                    All Data
-                  </ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.applyFilterBtn}
-                  onPress={applyModalFilters}
-                >
-                  <ThemedText style={styles.applyFilterBtnText}>
-                    Apply
-                  </ThemedText>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
-    </Modal>
+  const handleViewDetails = useCallback(
+    (transaction: Transaction) => {
+      router.push({
+        pathname: "/TransactionDetails",
+        params: {
+          transactionNumber: transaction.TransactionNumber,
+          organizationId: transaction.OrganizationId || 3,
+        },
+      });
+    },
+    [router],
   );
 
-  // Render the entire table with single horizontal scroll
   const renderTable = () => {
-    // Calculate total width including action buttons
     const totalWidth = 40 + 85 + 140 + 50 + 75 + 85 + 85 + 75 + 80 + 120;
-
     return (
       <ScrollView
         horizontal
@@ -751,52 +627,39 @@ export default function SalesListScreen() {
         bounces={false}
       >
         <View style={{ width: totalWidth }}>
-          {/* Table Header */}
+          {/* Header */}
           <View style={styles.headerRow}>
-            <View style={[styles.headerCell, styles.cellSn]}>
-              <ThemedText style={styles.headerText}>#</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellDate]}>
-              <ThemedText style={styles.headerText}>Date</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellProduct]}>
-              <ThemedText style={styles.headerText}>Product/Invoice</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellQty]}>
-              <ThemedText style={styles.headerText}>Qty</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellPrice]}>
-              <ThemedText style={styles.headerText}>Unit Price</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellSales]}>
-              <ThemedText style={styles.headerText}>Selling Price</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellAmount]}>
-              <ThemedText style={styles.headerText}>Amount</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellProfit]}>
-              <ThemedText style={styles.headerText}>Profit</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellStatus]}>
-              <ThemedText style={styles.headerText}>Status</ThemedText>
-            </View>
-            <View style={[styles.headerCell, styles.cellAction]}>
-              <ThemedText style={styles.headerText}>Actions</ThemedText>
-            </View>
+            {[
+              { label: "#", style: styles.cellSn },
+              { label: "Date", style: styles.cellDate },
+              { label: "Product/Invoice", style: styles.cellProduct },
+              { label: "Qty", style: styles.cellQty },
+              { label: "Unit Price", style: styles.cellPrice },
+              { label: "Selling Price", style: styles.cellSales },
+              { label: "Amount", style: styles.cellAmount },
+              { label: "Profit", style: styles.cellProfit },
+              { label: "Status", style: styles.cellStatus },
+              { label: "Actions", style: styles.cellAction },
+            ].map(({ label, style }) => (
+              <View key={label} style={[styles.headerCell, style]}>
+                <ThemedText style={styles.headerText}>{label}</ThemedText>
+              </View>
+            ))}
           </View>
 
-          {/* Table Body - Now with proper key */}
+          {/* Rows */}
           <FlatList
             data={filteredTransactions}
-            keyExtractor={(item, index) => 
-              item.TransactionId ? item.TransactionId.toString() : index.toString()
+            keyExtractor={(item, index) =>
+              item.TransactionId
+                ? item.TransactionId.toString()
+                : index.toString()
             }
             renderItem={({ item, index }) => {
               const statusColor = getStatusStyle(item.PaymentStatus);
               const profit = (item.ProfitPerUnit || 0) * (item.Quantity || 0);
               const amount =
                 item.SalesValue || item.TotalAmount || item.Amount || 0;
-
               return (
                 <View style={styles.tableRow}>
                   <View style={[styles.cell, styles.cellSn, styles.cellBorder]}>
@@ -876,6 +739,7 @@ export default function SalesListScreen() {
                     <View style={styles.actionButtons}>
                       <TouchableOpacity
                         style={[styles.actionBtn, styles.returnBtn]}
+                        onPress={() => handleViewDetails(item)}
                       >
                         <ThemedText style={styles.actionBtnText}>
                           {item.IsExchangeRelated ? "Exchange" : "Ext/Re"}
@@ -883,6 +747,12 @@ export default function SalesListScreen() {
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={[styles.actionBtn, styles.editBtn]}
+                        onPress={() => {
+                          Alert.alert(
+                            "Edit",
+                            `Edit transaction ${item.TransactionNumber}`,
+                          );
+                        }}
                       >
                         <ThemedText style={styles.actionBtnText}>
                           Edit
@@ -921,7 +791,7 @@ export default function SalesListScreen() {
   }
 
   return (
-    <ScrollView 
+    <ScrollView
       style={styles.container}
       showsVerticalScrollIndicator={true}
       bounces={true}
@@ -937,8 +807,22 @@ export default function SalesListScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Active Filters Display */}
-      {(appliedSelectedCategory || appliedSelectedStatus || appliedStartDate || appliedSearchText) &&
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search by product, invoice or customer..."
+          placeholderTextColor="#999"
+          value={appliedSearchText}
+          onChangeText={setAppliedSearchText}
+        />
+      </View>
+
+      {/* Active Filters */}
+      {(appliedSelectedCategory ||
+        appliedSelectedStatus ||
+        appliedStartDate ||
+        appliedSearchText) &&
         !appliedShowAllHistory && (
           <View style={styles.activeFilters}>
             {appliedSearchText && (
@@ -948,7 +832,6 @@ export default function SalesListScreen() {
                 </ThemedText>
               </View>
             )}
-
             {appliedSelectedCategory && (
               <View style={styles.filterTag}>
                 <ThemedText style={styles.filterTagText}>
@@ -956,7 +839,6 @@ export default function SalesListScreen() {
                 </ThemedText>
               </View>
             )}
-
             {appliedSelectedStatus && (
               <View style={styles.filterTag}>
                 <ThemedText style={styles.filterTagText}>
@@ -964,7 +846,6 @@ export default function SalesListScreen() {
                 </ThemedText>
               </View>
             )}
-
             {appliedStartDate && appliedEndDate && (
               <View style={styles.filterTag}>
                 <ThemedText style={styles.filterTagText}>
@@ -983,17 +864,16 @@ export default function SalesListScreen() {
         </View>
       )}
 
-      {/* Summary Section */}
+      {/* Summary Cards - Box Style - Smaller Font & No Borders */}
       {filteredTransactions.length > 0 && (
         <View style={styles.summaryContainer}>
           <View style={styles.summaryHeader}>
             <ThemedText style={styles.summaryTitle}>Sales Summary</ThemedText>
-            <ThemedText style={styles.summarySubtitle}>
-              Based on {filteredTransactions.length} transactions
-            </ThemedText>
           </View>
 
+          {/* Summary Grid with Boxes - 2 Rows x 3 Columns */}
           <View style={styles.summaryGrid}>
+            {/* Row 1 */}
             <View style={styles.summaryCard}>
               <ThemedText style={styles.summaryCardValue}>
                 {summary.totalTxn}
@@ -1012,32 +892,39 @@ export default function SalesListScreen() {
               </ThemedText>
             </View>
 
-            <View style={styles.summaryCard}>
-              <ThemedText style={styles.summaryCardValue}>
+            <View style={[styles.summaryCard, styles.summaryCardHighlight]}>
+              <ThemedText
+                style={[styles.summaryCardValue, styles.highlightText]}
+              >
                 ৳{summary.totalAmount.toFixed(2)}
               </ThemedText>
-              <ThemedText style={styles.summaryCardLabel}>
+              <ThemedText
+                style={[styles.summaryCardLabel, styles.highlightLabel]}
+              >
                 Total Amount
               </ThemedText>
             </View>
 
-            <View style={styles.summaryCard}>
-              <ThemedText style={styles.summaryCardValue}>
+            {/* Row 2 */}
+            <View style={[styles.summaryCard, styles.summaryCardProfit]}>
+              <ThemedText style={[styles.summaryCardValue, styles.profitText]}>
                 ৳{summary.totalProfit.toFixed(2)}
               </ThemedText>
-              <ThemedText style={styles.summaryCardLabel}>
+              <ThemedText style={[styles.summaryCardLabel, styles.profitLabel]}>
                 Total Profit
               </ThemedText>
             </View>
 
-            <View style={styles.summaryCard}>
-              <ThemedText style={styles.summaryCardValue}>
+            <View style={[styles.summaryCard, styles.summaryCardDue]}>
+              <ThemedText style={[styles.summaryCardValue, styles.dueText]}>
                 ৳{summary.totalDue.toFixed(2)}
               </ThemedText>
-              <ThemedText style={styles.summaryCardLabel}>Total Due</ThemedText>
+              <ThemedText style={[styles.summaryCardLabel, styles.dueLabel]}>
+                Total Due
+              </ThemedText>
             </View>
 
-            <View style={[styles.summaryCard, styles.profitCard]}>
+            <View style={styles.summaryCard}>
               <ThemedText style={styles.summaryCardValue}>
                 {summary.avgProfitMargin.toFixed(1)}%
               </ThemedText>
@@ -1049,7 +936,7 @@ export default function SalesListScreen() {
         </View>
       )}
 
-      {/* Table Section */}
+      {/* Table */}
       <View style={styles.tableContainer}>
         {filteredTransactions.length > 0 ? (
           renderTable()
@@ -1081,7 +968,7 @@ export default function SalesListScreen() {
           value={parseDateString(tempStartDate) || new Date()}
           mode="date"
           display="default"
-          onChange={(event, selectedDate) => {
+          onChange={(_, selectedDate) => {
             setShowStartDatePicker(false);
             if (selectedDate) {
               setTempStartDate(formatDateForPicker(selectedDate));
@@ -1090,13 +977,12 @@ export default function SalesListScreen() {
           }}
         />
       )}
-
       {showEndDatePicker && (
         <DateTimePicker
           value={parseDateString(tempEndDate) || new Date()}
           mode="date"
           display="default"
-          onChange={(event, selectedDate) => {
+          onChange={(_, selectedDate) => {
             setShowEndDatePicker(false);
             if (selectedDate) {
               setTempEndDate(formatDateForPicker(selectedDate));
@@ -1106,16 +992,31 @@ export default function SalesListScreen() {
         />
       )}
 
-      <FilterModal />
+      {/* Filter Modal */}
+      <FilterModal
+        visible={showFilterModal}
+        onClose={handleCloseModal}
+        categories={categories}
+        tempSelectedCategory={tempSelectedCategory}
+        setTempSelectedCategory={setTempSelectedCategory}
+        tempSelectedStatus={tempSelectedStatus}
+        setTempSelectedStatus={setTempSelectedStatus}
+        tempStartDate={tempStartDate}
+        tempEndDate={tempEndDate}
+        tempDatePreset={tempDatePreset}
+        onDatePreset={handleDatePreset}
+        onStartDatePress={handleStartDatePress}
+        onEndDatePress={handleEndDatePress}
+        onReset={resetFilters}
+        onShowAll={showAllData}
+        onApply={applyModalFilters}
+      />
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: "#f5f5f5",
-  },
+  container: { flex: 1, backgroundColor: "#f5f5f5" },
   centerContainer: {
     flex: 1,
     justifyContent: "center",
@@ -1123,7 +1024,6 @@ const styles = StyleSheet.create({
     padding: 20,
   },
 
-  // Header
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1142,7 +1042,21 @@ const styles = StyleSheet.create({
   },
   filterBtnText: { color: "#fff", fontSize: 14, fontWeight: "bold" },
 
-  // Active Filters
+  searchContainer: {
+    padding: 12,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+  },
+  searchInput: {
+    backgroundColor: "#f5f5f5",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#333",
+  },
+
   activeFilters: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1171,45 +1085,87 @@ const styles = StyleSheet.create({
   },
   allHistoryText: { color: "#fff", fontSize: 12, fontWeight: "bold" },
 
-  // Summary
   summaryContainer: {
     backgroundColor: "#fff",
     margin: 12,
     borderRadius: 12,
     overflow: "hidden",
     elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   summaryHeader: { padding: 16, backgroundColor: "#007bff" },
-  summaryTitle: { fontSize: 16, fontWeight: "bold", color: "#fff" },
-  summarySubtitle: { fontSize: 11, color: "#cce5ff", marginTop: 4 },
-  summaryGrid: { flexDirection: "row", flexWrap: "wrap", padding: 12, gap: 12 },
+  summaryTitle: { fontSize: 18, fontWeight: "bold", color: "#fff" },
+  summarySubtitle: { fontSize: 12, color: "#cce5ff", marginTop: 4 },
+
+  summaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    padding: 12,
+    gap: 12,
+    justifyContent: "space-between",
+  },
+
   summaryCard: {
     flex: 1,
-    minWidth: "28%",
+    minWidth: "30%",
     backgroundColor: "#f8f9fa",
     padding: 12,
     borderRadius: 8,
     alignItems: "center",
     gap: 6,
-  },
-  summaryCardValue: { fontSize: 16, fontWeight: "bold", color: "#333" },
-  summaryCardLabel: { fontSize: 10, color: "#666" },
-  profitCard: { backgroundColor: "#e8f5e9" },
-
-  // Table Container
-  tableContainer: { 
-    marginHorizontal: 12,
-    marginBottom: 20,
+    elevation: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
   },
 
-  // Table Header
+  summaryCardHighlight: {
+    backgroundColor: "#e3f2fd",
+  },
+
+  summaryCardProfit: {
+    backgroundColor: "#e8f5e9",
+  },
+
+  summaryCardDue: {
+    backgroundColor: "#fff3e0",
+  },
+
+  summaryCardValue: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#333",
+  },
+
+  summaryCardLabel: {
+    fontSize: 10,
+    color: "#666",
+    fontWeight: "500",
+    textAlign: "center",
+  },
+
+  highlightText: { color: "#007bff" },
+  highlightLabel: { color: "#007bff", fontSize: 10 },
+  profitText: { color: "#4caf50" },
+  profitLabel: { color: "#4caf50", fontSize: 10 },
+  dueText: { color: "#ff9800" },
+  dueLabel: { color: "#ff9800", fontSize: 10 },
+
+  tableContainer: { marginHorizontal: 12, marginBottom: 20 },
+
   headerRow: {
     flexDirection: "row",
     backgroundColor: "#343a40",
     paddingVertical: 12,
     paddingHorizontal: 8,
-    borderRadius: 8,
-    marginBottom: 8,
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+    borderWidth: 1,
+    borderColor: "#dee2e6",
   },
   headerCell: {
     justifyContent: "center",
@@ -1223,21 +1179,19 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
-  // Table Row
   tableRow: {
     flexDirection: "row",
     backgroundColor: "#fff",
     paddingVertical: 12,
     paddingHorizontal: 8,
-    marginBottom: 6,
-    borderRadius: 8,
-    elevation: 1,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: "#dee2e6",
   },
   cell: { justifyContent: "center", paddingHorizontal: 4 },
-  cellBorder: { borderRightWidth: 1, borderRightColor: "#e0e0e0" },
+  cellBorder: { borderRightWidth: 1, borderRightColor: "#dee2e6" },
   cellText: { fontSize: 11, color: "#555" },
 
-  // Column Widths
   cellSn: { width: 40, alignItems: "center" },
   cellDate: { width: 85, alignItems: "center" },
   cellProduct: { width: 140 },
@@ -1252,7 +1206,6 @@ const styles = StyleSheet.create({
   productName: { fontSize: 12, fontWeight: "bold", color: "#333" },
   txnNumber: { fontSize: 10, color: "#666", marginTop: 2 },
   amountText: { fontSize: 11, fontWeight: "bold", color: "#b8860b" },
-  profitText: { fontSize: 11, fontWeight: "bold", color: "#2e7d32" },
 
   statusBadge: {
     paddingHorizontal: 8,
@@ -1275,7 +1228,6 @@ const styles = StyleSheet.create({
   editBtn: { backgroundColor: "#ffc107" },
   actionBtnText: { color: "#fff", fontSize: 10, fontWeight: "bold" },
 
-  // Modal
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
@@ -1325,15 +1277,6 @@ const styles = StyleSheet.create({
   filterOptionActive: { backgroundColor: "#007bff" },
   filterOptionText: { fontSize: 13, color: "#666" },
   filterOptionTextActive: { color: "#fff" },
-
-  searchInputModal: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 6,
-    padding: 12,
-    fontSize: 14,
-    backgroundColor: "#fff",
-  },
 
   dateRangeContainer: { gap: 10 },
   datePickerButton: {

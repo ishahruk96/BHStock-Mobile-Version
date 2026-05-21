@@ -115,6 +115,7 @@ export default function TabLayout() {
               {/* SALES */}
               <Text style={styles.title}>Sales</Text>
               <View style={styles.grid}>
+                <MenuItem label="Test" icon="test-circle" onPress={() => go("/TransactionDetails")} />
                 <MenuItem label="Single Entry" icon="add-circle" onPress={() => go("/sales/single_sales_entry")} />
                 <MenuItem label="Sales Entry" icon="create" onPress={() => go("/sales/sales_entry")} />
                 <MenuItem label="Bulk Entry" icon="layers" onPress={() => go("/sales/sales_bulk_entry")} />
@@ -139,6 +140,7 @@ export default function TabLayout() {
                 <MenuItem label="Expense" icon="card" onPress={() => go("/expense")} />
                 <MenuItem label="Report" icon="bar-chart" onPress={() => go("/report")} />
                 <MenuItem label="Help" icon="help-circle" onPress={() => go("/help")} />
+                
               </View>
             </ScrollView>
 
