@@ -1,11 +1,11 @@
 import { ThemedText } from "@/components/themed-text";
 import { FontAwesome5, Ionicons, MaterialIcons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import Checkbox from "expo-checkbox";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,7 +14,6 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 
@@ -26,7 +25,7 @@ interface DueCustomer {
   TotalSale: number;
   TotalPaid: number;
   DueAmount: number;
-  Status: string;
+  PaymentStatus: string;
   LastTransactionDate: string;
 }
 
@@ -35,6 +34,48 @@ interface DueSummary {
   TotalReceived: number;
   TotalDue: number;
   CustomersWithDue: number;
+}
+
+interface Product {
+  ProductId: number;
+  ProductName: string;
+  SaleAmount: number;
+  PaidAmount: number;
+  DueAmount: number;
+  RefundAmount: number;
+  NetSale: number;
+  EffectivePayment: number;
+}
+
+interface Transaction {
+  TransactionNumber: string;
+  TransactionDate: string;
+  TotalSale: number;
+  TotalPaid: number;
+  DueAmount: number;
+  TotalRefund: number;
+  NetSale: number;
+  EffectivePayment: number;
+  PaymentStatus: string;
+  IsSelected: boolean;
+  products: Product[];
+}
+
+interface CustomerDetails {
+  success: boolean;
+  customer: {
+    CustomerId: number;
+    CustomerName: string;
+    CustomerPhone: string;
+    TotalDue: number;
+  };
+  dueSummary: {
+    TotalSale: number;
+    TotalPaid: number;
+    TotalDue: number;
+    TotalRefund: number;
+  };
+  transactions: Transaction[];
 }
 
 export default function CustomerDueListMobile() {
@@ -61,10 +102,23 @@ export default function CustomerDueListMobile() {
   const [selectedCustomer, setSelectedCustomer] = useState<DueCustomer | null>(
     null,
   );
-  const [paymentModalVisible, setPaymentModalVisible] =
+  const [selectedTransactionsForReceive, setSelectedTransactionsForReceive] =
+    useState<string[]>([]);
+  const [receiveModalVisible, setReceiveModalVisible] =
     useState<boolean>(false);
   const [bulkModalVisible, setBulkModalVisible] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
+
+  // Bulk Payment Specific States
+  const [customerDetails, setCustomerDetails] =
+    useState<CustomerDetails | null>(null);
+  const [selectedTransactions, setSelectedTransactions] = useState<string[]>(
+    [],
+  );
+  const [loadingDetails, setLoadingDetails] = useState<boolean>(false);
+  const [expandedTransactions, setExpandedTransactions] = useState<Set<string>>(
+    new Set(),
+  );
 
   // Form Fields
   const [paymentAmount, setPaymentAmount] = useState<string>("");
@@ -76,12 +130,9 @@ export default function CustomerDueListMobile() {
 
   const scrollViewRef = useRef<ScrollView>(null);
 
-  // Generate Transaction Number
-  const generateTransactionNumber = () => {
-    const randomNum = Math.floor(Math.random() * 1000000)
-      .toString()
-      .padStart(6, "0");
-    return `BHP${randomNum}`;
+  // Generate Payment Transaction Number
+  const generatePaymentTransactionNumber = () => {
+    return `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   };
 
   // Initial Fetch Data
@@ -134,21 +185,33 @@ export default function CustomerDueListMobile() {
     }
     if (selectedStatus !== "All") {
       result = result.filter(
-        (item) => item.Status.toLowerCase() === selectedStatus.toLowerCase(),
+        (item) =>
+          item.PaymentStatus.toLowerCase() === selectedStatus.toLowerCase(),
       );
     }
     setFilteredCustomers(result);
   };
 
-  // Format Date for display - Fixed to show properly
+  // Format Date for display
   const formatDate = (dateString: string) => {
     if (!dateString) return "N/A";
     try {
+      if (dateString.startsWith("/Date(")) {
+        const timestamp = parseInt(
+          dateString.replace("/Date(", "").replace(")/", ""),
+        );
+        const date = new Date(timestamp);
+        return date.toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        });
+      }
       const date = new Date(dateString);
       if (isNaN(date.getTime())) return dateString;
       return date.toLocaleDateString("en-US", {
         year: "numeric",
-        month: "long",
+        month: "short",
         day: "numeric",
       });
     } catch {
@@ -164,121 +227,93 @@ export default function CustomerDueListMobile() {
     return `${year}-${month}-${day}T00:00:00`;
   };
 
-  // POST: Make Single Payment
-const handleMakePayment = async () => {
-  if (!selectedCustomer) {
-    return Alert.alert("Error", "No customer selected");
-  }
-  
-  if (!paymentAmount || parseFloat(paymentAmount) <= 0) {
-    return Alert.alert("Validation Error", "Please provide a valid amount");
-  }
+  // Fetch Customer Details
+  const fetchCustomerDetails = async (customerId: number) => {
+    setLoadingDetails(true);
+    try {
+      const response = await fetch(
+        `http://devmystock.byteheart.com/Due/CustomerDue?customerId=${customerId}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+        },
+      );
 
-  // Get fresh customer data to check current due amount
-  const currentDue = selectedCustomer.DueAmount;
-  
-  if (parseFloat(paymentAmount) > currentDue) {
-    return Alert.alert(
-      "Validation Error", 
-      `Payment amount (${paymentAmount}) cannot exceed due amount (${currentDue})`
-    );
-  }
+      const result = await response.json();
+      console.log(
+        "Customer Details Response:",
+        JSON.stringify(result, null, 2),
+      );
 
-  setSubmitting(true);
-
-  const transactionNumber = generateTransactionNumber();
-  const formattedDate = formatDateForAPI(paymentDate);
-  
-  // Create payload - match exactly with Postman
-  const payload: any = {
-    TransactionNumber: transactionNumber,
-    PaymentAmount: parseFloat(paymentAmount),
-    PaymentDate: formattedDate,
-    PaymentMethod: paymentMethod,
-    CustomerId: selectedCustomer.CustomerId,
-    OrganizationId: orgId,
+      if (result.success) {
+        setCustomerDetails(result);
+        // Filter only unpaid or partial transactions where due amount > 0
+        const unpaidTransactions =
+          result.transactions
+            ?.filter(
+              (t: Transaction) =>
+                (t.PaymentStatus === "Unpaid" ||
+                  t.PaymentStatus === "Partial") &&
+                t.DueAmount > 0,
+            )
+            .map((t: Transaction) => t.TransactionNumber) || [];
+        return result;
+      } else {
+        Alert.alert("Error", "Failed to fetch customer details");
+        return null;
+      }
+    } catch (error) {
+      console.error("Error fetching customer details:", error);
+      Alert.alert("Error", "Network error occurred");
+      return null;
+    } finally {
+      setLoadingDetails(false);
+    }
   };
 
-  // Only add ReferenceNumber if it has value and not empty
-  if (referenceNo && referenceNo.trim() !== "") {
-    payload.ReferenceNumber = referenceNo.trim();
-  }
-
-  // Only add Remarks if it has value and not empty
-  if (remarks && remarks.trim() !== "") {
-    payload.Remarks = remarks.trim();
-  }
-
-  console.log("=== Sending Payment Request ===");
-  console.log("Customer:", selectedCustomer.CustomerName);
-  console.log("Current Due:", currentDue);
-  console.log("Payment Amount:", payload.PaymentAmount);
-  console.log("Full Payload:", JSON.stringify(payload, null, 2));
-
-  try {
-    const response = await fetch(
-      "http://devmystock.byteheart.com/Due/MakePayment",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-        body: JSON.stringify(payload),
-      },
-    );
-
-    const result = await response.json();
-    console.log("=== Payment Response ===");
-    console.log("Success:", result.Success);
-    console.log("Message:", result.Message);
-    console.log("Amount Paid:", result.AmountPaid);
-    console.log("Remaining Due:", result.RemainingDue);
-    console.log("Full Response:", JSON.stringify(result, null, 2));
-
-    if (response.ok && result.Success === true) {
-      Alert.alert(
-        "Success", 
-        `${result.Message}\nAmount Paid: ${result.AmountPaid}\nRemaining Due: ${result.RemainingDue}`
-      );
-      setPaymentModalVisible(false);
-      // Reset form
-      setPaymentAmount("");
-      setReferenceNo("");
-      setRemarks("");
-      setPaymentMethod("Cash");
-      setPaymentDate(new Date());
-      setSelectedCustomer(null);
-      // Refresh data to get updated due amounts
-      await fetchDueData();
-    } else {
-      Alert.alert("Payment Failed", result.Message || "Payment could not be processed");
-    }
-  } catch (err) {
-    console.error("Payment error:", err);
-    Alert.alert("Error", "Network error occurred. Please check your connection.");
-  } finally {
-    setSubmitting(false);
-  }
-};
-
-  // POST: Make Bulk Payment
-  const handleMakeBulkPayment = async () => {
+  // POST: Receive Payment
+  const handleReceivePayment = async () => {
     if (!selectedCustomer) {
       return Alert.alert("Error", "No customer selected");
     }
 
-    if (!paymentAmount || parseFloat(paymentAmount) <= 0) {
+    if (selectedTransactionsForReceive.length === 0) {
       return Alert.alert(
         "Validation Error",
-        "Please provide a valid bulk amount",
+        "Please select at least one transaction",
+      );
+    }
+
+    if (!paymentAmount || parseFloat(paymentAmount) <= 0) {
+      return Alert.alert("Validation Error", "Please provide a valid amount");
+    }
+
+    // Calculate total due of selected transactions
+    let totalDue = 0;
+    customerDetails?.transactions.forEach((transaction) => {
+      if (
+        selectedTransactionsForReceive.includes(transaction.TransactionNumber)
+      ) {
+        totalDue += transaction.DueAmount;
+      }
+    });
+
+    if (parseFloat(paymentAmount) > totalDue) {
+      return Alert.alert(
+        "Validation Error",
+        `Payment amount (${paymentAmount}) cannot exceed total due amount (${totalDue.toFixed(2)})`,
       );
     }
 
     setSubmitting(true);
 
     const formattedDate = formatDateForAPI(paymentDate);
+    const paymentTransactionNumber = generatePaymentTransactionNumber();
+    const selectedTransactionsString = selectedTransactionsForReceive.join(",");
 
     const payload: any = {
       CustomerId: selectedCustomer.CustomerId,
@@ -286,21 +321,21 @@ const handleMakePayment = async () => {
       PaymentDate: formattedDate,
       PaymentMethod: paymentMethod,
       OrganizationId: orgId,
-      PaymentTransactionNumber: `PAY-${Date.now()}`,
-      SelectedTransactions: "TXN-1001,TXN-1002",
+      PaymentTransactionNumber: paymentTransactionNumber,
+      SelectedTransactions: selectedTransactionsString,
     };
 
-    // Only add ReferenceNumber if it has value
     if (referenceNo && referenceNo.trim() !== "") {
-      payload.ReferenceNumber = referenceNo;
+      payload.ReferenceNumber = referenceNo.trim();
     }
 
-    // Only add Remarks if it has value
     if (remarks && remarks.trim() !== "") {
-      payload.Remarks = remarks;
+      payload.Remarks = remarks.trim();
     }
 
-    console.log("Sending bulk payload:", JSON.stringify(payload, null, 2));
+    console.log("=== Sending Receive Payment Request ===");
+    console.log("Selected Transactions:", selectedTransactionsString);
+    console.log("Full Payload:", JSON.stringify(payload, null, 2));
 
     try {
       const response = await fetch(
@@ -317,22 +352,125 @@ const handleMakePayment = async () => {
       );
 
       const result = await response.json();
-      console.log("Bulk Response:", result);
+      console.log("=== Receive Payment Response ===");
+      console.log("Full Response:", JSON.stringify(result, null, 2));
 
-      if (response.ok && result.Success) {
+      if (response.ok && result.Success === true) {
         Alert.alert(
-          "Bulk Success",
-          result.Message || "Bulk payments distributed successfully.",
+          "Success",
+          `${result.Message}\nAmount Paid: ${result.TotalPaid}\nRemaining Due: ${result.TotalDue}`,
         );
-        setBulkModalVisible(false);
-        // Reset form
+        setReceiveModalVisible(false);
         setPaymentAmount("");
         setReferenceNo("");
         setRemarks("");
         setPaymentMethod("Cash");
         setPaymentDate(new Date());
         setSelectedCustomer(null);
-        fetchDueData();
+        setSelectedTransactionsForReceive([]);
+        setCustomerDetails(null);
+        setExpandedTransactions(new Set());
+        await fetchDueData();
+      } else {
+        Alert.alert(
+          "Payment Failed",
+          result.Message || "Payment could not be processed",
+        );
+      }
+    } catch (err) {
+      console.error("Payment error:", err);
+      Alert.alert(
+        "Error",
+        "Network error occurred. Please check your connection.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // POST: Make Bulk Payment
+  const handleMakeBulkPayment = async () => {
+    if (!selectedCustomer) {
+      return Alert.alert("Error", "No customer selected");
+    }
+
+    if (!paymentAmount || parseFloat(paymentAmount) <= 0) {
+      return Alert.alert(
+        "Validation Error",
+        "Please provide a valid bulk amount",
+      );
+    }
+
+    if (selectedTransactions.length === 0) {
+      return Alert.alert(
+        "Validation Error",
+        "Please select at least one transaction for bulk payment",
+      );
+    }
+
+    setSubmitting(true);
+
+    const formattedDate = formatDateForAPI(paymentDate);
+    const paymentTransactionNumber = generatePaymentTransactionNumber();
+    const selectedTransactionsString = selectedTransactions.join(",");
+
+    const payload: any = {
+      CustomerId: selectedCustomer.CustomerId,
+      PaymentAmount: parseFloat(paymentAmount),
+      PaymentDate: formattedDate,
+      PaymentMethod: paymentMethod,
+      OrganizationId: orgId,
+      PaymentTransactionNumber: paymentTransactionNumber,
+      SelectedTransactions: selectedTransactionsString,
+    };
+
+    if (referenceNo && referenceNo.trim() !== "") {
+      payload.ReferenceNumber = referenceNo.trim();
+    }
+
+    if (remarks && remarks.trim() !== "") {
+      payload.Remarks = remarks.trim();
+    }
+
+    console.log("=== Sending Bulk Payment Request ===");
+    console.log("Payment Transaction Number:", paymentTransactionNumber);
+    console.log("Selected Transactions:", selectedTransactionsString);
+    console.log("Full Payload:", JSON.stringify(payload, null, 2));
+
+    try {
+      const response = await fetch(
+        "http://devmystock.byteheart.com/Due/MakeBulkPayment",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+
+      const result = await response.json();
+      console.log("=== Bulk Payment Response ===");
+      console.log("Full Response:", JSON.stringify(result, null, 2));
+
+      if (response.ok && result.Success === true) {
+        Alert.alert(
+          "Bulk Payment Success",
+          `${result.Message}\nTotal Paid: ${result.TotalPaid}\nTotal Due: ${result.TotalDue}`,
+        );
+        setBulkModalVisible(false);
+        setPaymentAmount("");
+        setReferenceNo("");
+        setRemarks("");
+        setPaymentMethod("Cash");
+        setPaymentDate(new Date());
+        setSelectedCustomer(null);
+        setSelectedTransactions([]);
+        setCustomerDetails(null);
+        setExpandedTransactions(new Set());
+        await fetchDueData();
       } else {
         Alert.alert("Error", result.Message || "Bulk payment failed");
       }
@@ -344,50 +482,143 @@ const handleMakePayment = async () => {
     }
   };
 
-  const openPaymentSetup = async (customer: DueCustomer, isBulk: boolean) => {
-  // First refresh the customer data to get latest due amount
-  setLoading(true);
-  try {
-    const response = await fetch(
-      "http://devmystock.byteheart.com/Due/Index",
-      {
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-      },
-    );
-    
-    const result = await response.json();
-    if (result.success) {
-      const updatedCustomer = result.data?.find((c: DueCustomer) => c.CustomerId === customer.CustomerId);
-      if (updatedCustomer) {
-        setSelectedCustomer(updatedCustomer);
-        setPaymentAmount(updatedCustomer.DueAmount.toString());
+  // Toggle transaction selection for receive
+  const toggleReceiveTransactionSelection = (transactionNumber: string) => {
+    setSelectedTransactionsForReceive((prev) => {
+      if (prev.includes(transactionNumber)) {
+        return prev.filter((t) => t !== transactionNumber);
       } else {
-        setSelectedCustomer(customer);
-        setPaymentAmount(customer.DueAmount.toString());
+        return [...prev, transactionNumber];
       }
+    });
+  };
+
+  // Toggle transaction selection for bulk
+  const toggleTransactionSelection = (transactionNumber: string) => {
+    setSelectedTransactions((prev) => {
+      if (prev.includes(transactionNumber)) {
+        return prev.filter((t) => t !== transactionNumber);
+      } else {
+        return [...prev, transactionNumber];
+      }
+    });
+  };
+
+  // Select/Deselect All for receive
+  const toggleSelectAllReceive = () => {
+    if (!customerDetails?.transactions) return;
+
+    const unpaidTransactions = customerDetails.transactions
+      .filter(
+        (t) =>
+          (t.PaymentStatus === "Unpaid" || t.PaymentStatus === "Partial") &&
+          t.DueAmount > 0,
+      )
+      .map((t) => t.TransactionNumber);
+
+    if (selectedTransactionsForReceive.length === unpaidTransactions.length) {
+      setSelectedTransactionsForReceive([]);
     } else {
-      setSelectedCustomer(customer);
-      setPaymentAmount(customer.DueAmount.toString());
+      setSelectedTransactionsForReceive(unpaidTransactions);
     }
-  } catch (error) {
-    console.error("Error refreshing customer data:", error);
+  };
+
+  // Select/Deselect All for bulk
+  const toggleSelectAll = () => {
+    if (!customerDetails?.transactions) return;
+
+    const unpaidTransactions = customerDetails.transactions
+      .filter(
+        (t) =>
+          (t.PaymentStatus === "Unpaid" || t.PaymentStatus === "Partial") &&
+          t.DueAmount > 0,
+      )
+      .map((t) => t.TransactionNumber);
+
+    if (selectedTransactions.length === unpaidTransactions.length) {
+      setSelectedTransactions([]);
+    } else {
+      setSelectedTransactions(unpaidTransactions);
+    }
+  };
+
+  // Toggle transaction expand/collapse
+  const toggleTransactionExpand = (transactionNumber: string) => {
+    setExpandedTransactions((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(transactionNumber)) {
+        newSet.delete(transactionNumber);
+      } else {
+        newSet.add(transactionNumber);
+      }
+      return newSet;
+    });
+  };
+
+  const openReceivePayment = async (customer: DueCustomer) => {
     setSelectedCustomer(customer);
-    setPaymentAmount(customer.DueAmount.toString());
-  } finally {
-    setLoading(false);
+    setPaymentAmount("");
     setReferenceNo("");
     setRemarks("");
     setPaymentMethod("Cash");
     setPaymentDate(new Date());
-    if (isBulk) setBulkModalVisible(true);
-    else setPaymentModalVisible(true);
-  }
-};
+
+    const details = await fetchCustomerDetails(customer.CustomerId);
+    if (details) {
+      // Auto select all unpaid/partial transactions
+      const unpaidTransactions =
+        details.transactions
+          ?.filter(
+            (t: Transaction) =>
+              (t.PaymentStatus === "Unpaid" || t.PaymentStatus === "Partial") &&
+              t.DueAmount > 0,
+          )
+          .map((t: Transaction) => t.TransactionNumber) || [];
+      setSelectedTransactionsForReceive(unpaidTransactions);
+      setReceiveModalVisible(true);
+    }
+  };
+
+  const openBulkPayment = async (customer: DueCustomer) => {
+    setSelectedCustomer(customer);
+    setPaymentAmount("");
+    setReferenceNo("");
+    setRemarks("");
+    setPaymentMethod("Cash");
+    setPaymentDate(new Date());
+
+    const details = await fetchCustomerDetails(customer.CustomerId);
+    if (details) {
+      setSelectedTransactions([]);
+      setBulkModalVisible(true);
+    }
+  };
+
+  // Calculate total selected amount for receive
+  const calculateTotalSelectedAmountReceive = () => {
+    if (!customerDetails?.transactions) return 0;
+    let total = 0;
+    customerDetails.transactions.forEach((transaction) => {
+      if (
+        selectedTransactionsForReceive.includes(transaction.TransactionNumber)
+      ) {
+        total += transaction.DueAmount;
+      }
+    });
+    return total;
+  };
+
+  // Calculate total selected amount for bulk
+  const calculateTotalSelectedAmount = () => {
+    if (!customerDetails?.transactions) return 0;
+    let total = 0;
+    customerDetails.transactions.forEach((transaction) => {
+      if (selectedTransactions.includes(transaction.TransactionNumber)) {
+        total += transaction.DueAmount;
+      }
+    });
+    return total;
+  };
 
   if (loading) {
     return (
@@ -515,7 +746,7 @@ const handleMakePayment = async () => {
             Customer Due Details
           </ThemedText>
 
-          {filteredCustomers.map((item, index) => (
+          {filteredCustomers.map((item) => (
             <View key={item.CustomerId} style={styles.customerCard}>
               <View style={styles.cardHeader}>
                 <View style={styles.customerInfo}>
@@ -531,7 +762,7 @@ const handleMakePayment = async () => {
                     styles.statusBadge,
                     {
                       backgroundColor:
-                        item.Status === "Unpaid" ? "#f8d7da" : "#fff3cd",
+                        item.PaymentStatus === "Unpaid" ? "#f8d7da" : "#fff3cd",
                     },
                   ]}
                 >
@@ -539,11 +770,14 @@ const handleMakePayment = async () => {
                     style={[
                       styles.statusText,
                       {
-                        color: item.Status === "Unpaid" ? "#721c24" : "#856404",
+                        color:
+                          item.PaymentStatus === "Unpaid"
+                            ? "#721c24"
+                            : "#856404",
                       },
                     ]}
                   >
-                    {item.Status}
+                    {item.PaymentStatus}
                   </ThemedText>
                 </View>
               </View>
@@ -571,7 +805,6 @@ const handleMakePayment = async () => {
                 </View>
               </View>
 
-              {/* Fixed Last Transaction Date Display */}
               <ThemedText style={styles.lastDate}>
                 Last Transaction: {formatDate(item.LastTransactionDate)}
               </ThemedText>
@@ -579,7 +812,7 @@ const handleMakePayment = async () => {
               <View style={styles.actionRow}>
                 <TouchableOpacity
                   style={[styles.actionBtn, { backgroundColor: "#28A745" }]}
-                  onPress={() => openPaymentSetup(item, false)}
+                  onPress={() => openReceivePayment(item)}
                 >
                   <Ionicons name="download-outline" size={14} color="white" />
                   <ThemedText style={styles.btnTxtWhite}> Receive</ThemedText>
@@ -589,7 +822,7 @@ const handleMakePayment = async () => {
                     styles.actionBtn,
                     { backgroundColor: "#6F42C1", marginLeft: 10 },
                   ]}
-                  onPress={() => openPaymentSetup(item, true)}
+                  onPress={() => openBulkPayment(item)}
                 >
                   <MaterialIcons name="payment" size={14} color="white" />
                   <ThemedText style={styles.btnTxtWhite}> Pay Bulk</ThemedText>
@@ -625,161 +858,236 @@ const handleMakePayment = async () => {
         </TouchableOpacity>
       </Modal>
 
-      {/* Payment Modal */}
+      {/* Receive Payment Modal */}
       <Modal
-        visible={paymentModalVisible}
+        visible={receiveModalVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setPaymentModalVisible(false)}
+        onRequestClose={() => {
+          setReceiveModalVisible(false);
+          setCustomerDetails(null);
+          setSelectedTransactionsForReceive([]);
+          setExpandedTransactions(new Set());
+        }}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalFormContent}>
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <ThemedText style={styles.formTitle}>
-                  Receive Payment
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalFormContent, { maxHeight: "90%" }]}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <ThemedText style={styles.formTitle}>Receive Payment</ThemedText>
+
+              <View style={styles.customerInfoBox}>
+                <ThemedText style={styles.customerNameLarge}>
+                  {selectedCustomer?.CustomerName}
                 </ThemedText>
-
-                <View style={styles.customerInfoBox}>
-                  <ThemedText style={styles.customerNameLarge}>
-                    {selectedCustomer?.CustomerName}
-                  </ThemedText>
-                  <ThemedText style={styles.customerPhoneLarge}>
-                    {selectedCustomer?.CustomerPhone || "No Phone"}
-                  </ThemedText>
-                </View>
-
-                <ThemedText style={styles.fieldLabel}>Due Amount</ThemedText>
-                <View style={[styles.inputField, styles.disabledField]}>
-                  <ThemedText style={styles.dueAmountText}>
-                    ৳{selectedCustomer?.DueAmount}
-                  </ThemedText>
-                </View>
-
-                <ThemedText style={styles.fieldLabel}>
-                  Payment Amount *
+                <ThemedText style={styles.customerPhoneLarge}>
+                  {selectedCustomer?.CustomerPhone || "No Phone"}
                 </ThemedText>
-                <TextInput
-                  style={styles.inputField}
-                  keyboardType="numeric"
-                  placeholder="Enter payment amount"
-                  value={paymentAmount}
-                  onChangeText={setPaymentAmount}
-                />
+              </View>
 
-                <ThemedText style={styles.fieldLabel}>
-                  Payment Date *
-                </ThemedText>
-                <TouchableOpacity
-                  style={styles.inputField}
-                  onPress={() => setShowDatePicker(true)}
-                >
-                  <ThemedText>{paymentDate.toLocaleDateString()}</ThemedText>
-                </TouchableOpacity>
-
-                {showDatePicker && (
-                  <DateTimePicker
-                    value={paymentDate}
-                    mode="date"
-                    display="default"
-                    onChange={(event, selectedDate) => {
-                      setShowDatePicker(false);
-                      if (selectedDate) {
-                        setPaymentDate(selectedDate);
-                      }
-                    }}
-                  />
-                )}
-
-                <ThemedText style={styles.fieldLabel}>
-                  Payment Method
-                </ThemedText>
-                <View style={styles.methodContainer}>
-                  {["Cash", "Bank", "bKash"].map((m) => (
-                    <TouchableOpacity
-                      key={m}
+              {customerDetails?.dueSummary && (
+                <View style={styles.dueSummaryBox}>
+                  <View style={styles.dueSummaryRow}>
+                    <ThemedText style={styles.dueSummaryLabel}>
+                      Total Sale:
+                    </ThemedText>
+                    <ThemedText style={styles.dueSummaryValue}>
+                      ৳{customerDetails.dueSummary.TotalSale}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.dueSummaryRow}>
+                    <ThemedText style={styles.dueSummaryLabel}>
+                      Total Paid:
+                    </ThemedText>
+                    <ThemedText style={styles.dueSummaryValue}>
+                      ৳{customerDetails.dueSummary.TotalPaid}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.dueSummaryRow}>
+                    <ThemedText style={styles.dueSummaryLabel}>
+                      Total Due:
+                    </ThemedText>
+                    <ThemedText
                       style={[
-                        styles.methodTab,
-                        paymentMethod === m && styles.methodTabActive,
+                        styles.dueSummaryValue,
+                        { color: "#DC3545", fontWeight: "bold" },
                       ]}
-                      onPress={() => setPaymentMethod(m)}
                     >
-                      <ThemedText
-                        style={
-                          paymentMethod === m
-                            ? { color: "#fff" }
-                            : { color: "#333" }
-                        }
-                      >
-                        {m}
-                      </ThemedText>
-                    </TouchableOpacity>
-                  ))}
+                      ৳{customerDetails.dueSummary.TotalDue}
+                    </ThemedText>
+                  </View>
                 </View>
+              )}
 
-                <ThemedText style={styles.fieldLabel}>
-                  Reference ID (Optional)
-                </ThemedText>
-                <TextInput
-                  style={styles.inputField}
-                  placeholder="Enter reference number"
-                  value={referenceNo}
-                  onChangeText={setReferenceNo}
+              {loadingDetails ? (
+                <ActivityIndicator
+                  size="large"
+                  color="#093"
+                  style={{ marginVertical: 20 }}
                 />
+              ) : (
+                <>
+                  {(!customerDetails?.transactions ||
+                    customerDetails.transactions.filter(
+                      (t) =>
+                        (t.PaymentStatus === "Unpaid" ||
+                          t.PaymentStatus === "Partial") &&
+                        t.DueAmount > 0,
+                    ).length === 0) && (
+                    <View style={styles.noTransactionsCard}>
+                      <MaterialIcons name="info" size={40} color="#999" />
+                      <ThemedText style={styles.noTransactionsText}>
+                        No unpaid or partial transactions found
+                      </ThemedText>
+                    </View>
+                  )}
 
-                <ThemedText style={styles.fieldLabel}>
-                  Remarks (Optional)
-                </ThemedText>
-                <TextInput
-                  style={[styles.inputField, styles.textArea]}
-                  placeholder="Add specific note..."
-                  value={remarks}
-                  onChangeText={setRemarks}
-                  multiline
-                  numberOfLines={3}
-                  textAlignVertical="top"
+                  <View style={styles.selectedSummary}>
+                    <View style={styles.selectedInfo}>
+                      <MaterialIcons
+                        name="check-circle"
+                        size={16}
+                        color="#28A745"
+                      />
+                      <ThemedText style={styles.selectedCountText}>
+                        Selected: {selectedTransactionsForReceive.length}
+                      </ThemedText>
+                    </View>
+                    <View style={styles.selectedTotalInfo}>
+                      <ThemedText style={styles.selectedTotalLabel}>
+                        Total Due:
+                      </ThemedText>
+                      <ThemedText style={styles.selectedTotalValue}>
+                        ৳{calculateTotalSelectedAmountReceive().toFixed(2)}
+                      </ThemedText>
+                    </View>
+                  </View>
+                </>
+              )}
+
+              <ThemedText style={styles.fieldLabel}>
+                Payment Amount *
+              </ThemedText>
+              <TextInput
+                style={styles.inputField}
+                keyboardType="numeric"
+                placeholder="Enter payment amount"
+                value={paymentAmount}
+                onChangeText={setPaymentAmount}
+              />
+
+              <ThemedText style={styles.fieldLabel}>Payment Date *</ThemedText>
+              <TouchableOpacity
+                style={styles.inputField}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <ThemedText>{paymentDate.toLocaleDateString()}</ThemedText>
+              </TouchableOpacity>
+
+              {showDatePicker && (
+                <DateTimePicker
+                  value={paymentDate}
+                  mode="date"
+                  display="default"
+                  onChange={(event, selectedDate) => {
+                    setShowDatePicker(false);
+                    if (selectedDate) {
+                      setPaymentDate(selectedDate);
+                    }
+                  }}
                 />
+              )}
 
-                <View
-                  style={[
-                    styles.filterRow,
-                    { marginTop: 20, marginBottom: 10 },
-                  ]}
-                >
+              <ThemedText style={styles.fieldLabel}>Payment Method</ThemedText>
+              <View style={styles.methodContainer}>
+                {["Cash", "Bank", "bKash"].map((m) => (
                   <TouchableOpacity
-                    style={[styles.filterBtn, { borderColor: "#dc3545" }]}
-                    onPress={() => {
-                      setPaymentModalVisible(false);
-                      setPaymentAmount("");
-                      setReferenceNo("");
-                      setRemarks("");
-                      setPaymentMethod("Cash");
-                      setPaymentDate(new Date());
-                    }}
-                  >
-                    <ThemedText style={{ color: "#dc3545" }}>Cancel</ThemedText>
-                  </TouchableOpacity>
-                  <TouchableOpacity
+                    key={m}
                     style={[
-                      styles.searchActionBtn,
-                      { backgroundColor: "#28A745" },
+                      styles.methodTab,
+                      paymentMethod === m && styles.methodTabActive,
                     ]}
-                    onPress={handleMakePayment}
-                    disabled={submitting}
+                    onPress={() => setPaymentMethod(m)}
                   >
-                    {submitting ? (
-                      <ActivityIndicator size="small" color="white" />
-                    ) : (
-                      <ThemedText style={styles.btnTxtWhite}>
-                        Submit Payment
-                      </ThemedText>
-                    )}
+                    <ThemedText
+                      style={
+                        paymentMethod === m
+                          ? { color: "#fff" }
+                          : { color: "#333" }
+                      }
+                    >
+                      {m}
+                    </ThemedText>
                   </TouchableOpacity>
-                </View>
-              </ScrollView>
-            </View>
+                ))}
+              </View>
+
+              <ThemedText style={styles.fieldLabel}>
+                Reference ID (Optional)
+              </ThemedText>
+              <TextInput
+                style={styles.inputField}
+                placeholder="Enter reference number"
+                value={referenceNo}
+                onChangeText={setReferenceNo}
+              />
+
+              <ThemedText style={styles.fieldLabel}>
+                Remarks (Optional)
+              </ThemedText>
+              <TextInput
+                style={[styles.inputField, styles.textArea]}
+                placeholder="Add specific note..."
+                value={remarks}
+                onChangeText={setRemarks}
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+              />
+
+              <View
+                style={[styles.filterRow, { marginTop: 20, marginBottom: 10 }]}
+              >
+                <TouchableOpacity
+                  style={[styles.filterBtn, { borderColor: "#dc3545" }]}
+                  onPress={() => {
+                    setReceiveModalVisible(false);
+                    setPaymentAmount("");
+                    setReferenceNo("");
+                    setRemarks("");
+                    setPaymentMethod("Cash");
+                    setPaymentDate(new Date());
+                    setSelectedCustomer(null);
+                    setCustomerDetails(null);
+                    setSelectedTransactionsForReceive([]);
+                    setExpandedTransactions(new Set());
+                  }}
+                >
+                  <ThemedText style={{ color: "#dc3545" }}>Cancel</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.searchActionBtn,
+                    { backgroundColor: "#28A745" },
+                  ]}
+                  onPress={handleReceivePayment}
+                  disabled={
+                    submitting ||
+                    loadingDetails ||
+                    selectedTransactionsForReceive.length === 0
+                  }
+                >
+                  {submitting ? (
+                    <ActivityIndicator size="small" color="white" />
+                  ) : (
+                    <ThemedText style={styles.btnTxtWhite}>
+                      Submit Payment
+                    </ThemedText>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
-        </TouchableWithoutFeedback>
+        </View>
       </Modal>
 
       {/* Bulk Payment Modal */}
@@ -787,154 +1095,423 @@ const handleMakePayment = async () => {
         visible={bulkModalVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setBulkModalVisible(false)}
+        onRequestClose={() => {
+          setBulkModalVisible(false);
+          setCustomerDetails(null);
+          setSelectedTransactions([]);
+          setExpandedTransactions(new Set());
+        }}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalFormContent}>
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <ThemedText style={styles.formTitle}>
-                  Make Bulk Payment
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalFormContent, { maxHeight: "90%" }]}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <ThemedText style={styles.formTitle}>Bulk Payment</ThemedText>
+
+              <View style={styles.customerInfoBox}>
+                <ThemedText style={styles.customerNameLarge}>
+                  {selectedCustomer?.CustomerName}
                 </ThemedText>
-
-                <View style={styles.customerInfoBox}>
-                  <ThemedText style={styles.customerNameLarge}>
-                    {selectedCustomer?.CustomerName}
-                  </ThemedText>
-                  <ThemedText style={styles.customerPhoneLarge}>
-                    {selectedCustomer?.CustomerPhone || "No Phone"}
-                  </ThemedText>
-                </View>
-
-                <ThemedText style={styles.fieldLabel}>Due Amount</ThemedText>
-                <View style={[styles.inputField, styles.disabledField]}>
-                  <ThemedText style={styles.dueAmountText}>
-                    ৳{selectedCustomer?.DueAmount}
-                  </ThemedText>
-                </View>
-
-                <ThemedText style={styles.fieldLabel}>Bulk Amount *</ThemedText>
-                <TextInput
-                  style={styles.inputField}
-                  keyboardType="numeric"
-                  placeholder="Enter bulk amount"
-                  value={paymentAmount}
-                  onChangeText={setPaymentAmount}
-                />
-
-                <ThemedText style={styles.fieldLabel}>
-                  Payment Date *
+                <ThemedText style={styles.customerPhoneLarge}>
+                  {selectedCustomer?.CustomerPhone || "No Phone"}
                 </ThemedText>
-                <TouchableOpacity
-                  style={styles.inputField}
-                  onPress={() => setShowDatePicker(true)}
-                >
-                  <ThemedText>{paymentDate.toLocaleDateString()}</ThemedText>
-                </TouchableOpacity>
+              </View>
 
-                {showDatePicker && (
-                  <DateTimePicker
-                    value={paymentDate}
-                    mode="date"
-                    display="default"
-                    onChange={(event, selectedDate) => {
-                      setShowDatePicker(false);
-                      if (selectedDate) {
-                        setPaymentDate(selectedDate);
-                      }
-                    }}
-                  />
-                )}
-
-                <ThemedText style={styles.fieldLabel}>
-                  Payment Method
-                </ThemedText>
-                <View style={styles.methodContainer}>
-                  {["Cash", "Bank", "bKash"].map((m) => (
-                    <TouchableOpacity
-                      key={m}
+              {customerDetails?.dueSummary && (
+                <View style={styles.dueSummaryBox}>
+                  <View style={styles.dueSummaryRow}>
+                    <ThemedText style={styles.dueSummaryLabel}>
+                      Total Sale:
+                    </ThemedText>
+                    <ThemedText style={styles.dueSummaryValue}>
+                      ৳{customerDetails.dueSummary.TotalSale}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.dueSummaryRow}>
+                    <ThemedText style={styles.dueSummaryLabel}>
+                      Total Paid:
+                    </ThemedText>
+                    <ThemedText style={styles.dueSummaryValue}>
+                      ৳{customerDetails.dueSummary.TotalPaid}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.dueSummaryRow}>
+                    <ThemedText style={styles.dueSummaryLabel}>
+                      Total Due:
+                    </ThemedText>
+                    <ThemedText
                       style={[
-                        styles.methodTab,
-                        paymentMethod === m && styles.methodTabActive,
+                        styles.dueSummaryValue,
+                        { color: "#DC3545", fontWeight: "bold" },
                       ]}
-                      onPress={() => setPaymentMethod(m)}
                     >
-                      <ThemedText
-                        style={
-                          paymentMethod === m
-                            ? { color: "#fff" }
-                            : { color: "#333" }
-                        }
-                      >
-                        {m}
-                      </ThemedText>
-                    </TouchableOpacity>
-                  ))}
+                      ৳{customerDetails.dueSummary.TotalDue}
+                    </ThemedText>
+                  </View>
                 </View>
+              )}
 
-                <ThemedText style={styles.fieldLabel}>
-                  Reference ID (Optional)
-                </ThemedText>
-                <TextInput
-                  style={styles.inputField}
-                  placeholder="Enter reference number"
-                  value={referenceNo}
-                  onChangeText={setReferenceNo}
+              <ThemedText style={[styles.fieldLabel, { marginTop: 10 }]}>
+                Select Transactions
+              </ThemedText>
+
+              {loadingDetails ? (
+                <ActivityIndicator
+                  size="large"
+                  color="#093"
+                  style={{ marginVertical: 20 }}
                 />
-
-                <ThemedText style={styles.fieldLabel}>
-                  Remarks (Optional)
-                </ThemedText>
-                <TextInput
-                  style={[styles.inputField, styles.textArea]}
-                  placeholder="Add specific note..."
-                  value={remarks}
-                  onChangeText={setRemarks}
-                  multiline
-                  numberOfLines={3}
-                  textAlignVertical="top"
-                />
-
-                <View
-                  style={[
-                    styles.filterRow,
-                    { marginTop: 20, marginBottom: 10 },
-                  ]}
-                >
+              ) : (
+                <>
                   <TouchableOpacity
-                    style={[styles.filterBtn, { borderColor: "#dc3545" }]}
-                    onPress={() => {
-                      setBulkModalVisible(false);
-                      setPaymentAmount("");
-                      setReferenceNo("");
-                      setRemarks("");
-                      setPaymentMethod("Cash");
-                      setPaymentDate(new Date());
-                    }}
+                    style={styles.selectAllBtn}
+                    onPress={toggleSelectAll}
                   >
-                    <ThemedText style={{ color: "#dc3545" }}>Cancel</ThemedText>
+                    <ThemedText style={styles.selectAllText}>
+                      {selectedTransactions.length > 0 &&
+                      customerDetails?.transactions?.filter(
+                        (t) =>
+                          (t.PaymentStatus === "Unpaid" ||
+                            t.PaymentStatus === "Partial") &&
+                          t.DueAmount > 0,
+                      ).length === selectedTransactions.length
+                        ? "Deselect All"
+                        : "Select All"}
+                    </ThemedText>
                   </TouchableOpacity>
+
+                  <View style={styles.transactionsList}>
+                    {customerDetails?.transactions
+                      ?.filter(
+                        (t) =>
+                          (t.PaymentStatus === "Unpaid" ||
+                            t.PaymentStatus === "Partial") &&
+                          t.DueAmount > 0,
+                      )
+                      .map((transaction) => (
+                        <View
+                          key={transaction.TransactionNumber}
+                          style={styles.transactionItem}
+                        >
+                          <View style={styles.transactionCheckboxRow}>
+                            <Checkbox
+                              value={selectedTransactions.includes(
+                                transaction.TransactionNumber,
+                              )}
+                              onValueChange={() =>
+                                toggleTransactionSelection(
+                                  transaction.TransactionNumber,
+                                )
+                              }
+                              color={
+                                selectedTransactions.includes(
+                                  transaction.TransactionNumber,
+                                )
+                                  ? "#28A745"
+                                  : undefined
+                              }
+                            />
+                            <TouchableOpacity
+                              style={styles.transactionInfoArea}
+                              onPress={() =>
+                                toggleTransactionExpand(
+                                  transaction.TransactionNumber,
+                                )
+                              }
+                            >
+                              <View style={styles.transactionHeaderInfo}>
+                                <ThemedText style={styles.transactionNumber}>
+                                  {transaction.TransactionNumber}
+                                </ThemedText>
+                                <View
+                                  style={[
+                                    styles.statusBadgeSmall,
+                                    {
+                                      backgroundColor:
+                                        transaction.PaymentStatus === "Unpaid"
+                                          ? "#f8d7da"
+                                          : "#fff3cd",
+                                    },
+                                  ]}
+                                >
+                                  <ThemedText
+                                    style={[
+                                      styles.statusTextSmall,
+                                      {
+                                        color:
+                                          transaction.PaymentStatus === "Unpaid"
+                                            ? "#721c24"
+                                            : "#856404",
+                                      },
+                                    ]}
+                                  >
+                                    {transaction.PaymentStatus}
+                                  </ThemedText>
+                                </View>
+                              </View>
+                              <ThemedText style={styles.transactionDate}>
+                                {formatDate(transaction.TransactionDate)}
+                              </ThemedText>
+                              <View style={styles.transactionAmounts}>
+                                <ThemedText
+                                  style={styles.transactionTotalAmount}
+                                >
+                                  Total: ৳{transaction.TotalSale}
+                                </ThemedText>
+                                <ThemedText style={styles.transactionDueAmount}>
+                                  Due: ৳{transaction.DueAmount}
+                                </ThemedText>
+                              </View>
+                              <View style={styles.expandIcon}>
+                                <Ionicons
+                                  name={
+                                    expandedTransactions.has(
+                                      transaction.TransactionNumber,
+                                    )
+                                      ? "chevron-up"
+                                      : "chevron-down"
+                                  }
+                                  size={20}
+                                  color="#666"
+                                />
+                              </View>
+                            </TouchableOpacity>
+                          </View>
+
+                          {expandedTransactions.has(
+                            transaction.TransactionNumber,
+                          ) &&
+                            transaction.products &&
+                            transaction.products.length > 0 && (
+                              <View style={styles.productsSection}>
+                                <View style={styles.productsHeader}>
+                                  <MaterialIcons
+                                    name="shopping-bag"
+                                    size={16}
+                                    color="#093"
+                                  />
+                                  <ThemedText style={styles.productsTitle}>
+                                    Products
+                                  </ThemedText>
+                                </View>
+                                {transaction.products.map((product) => (
+                                  <View
+                                    key={product.ProductId}
+                                    style={styles.productCard}
+                                  >
+                                    <ThemedText style={styles.productName}>
+                                      {product.ProductName}
+                                    </ThemedText>
+                                    <View style={styles.productStats}>
+                                      <View style={styles.productStat}>
+                                        <ThemedText
+                                          style={styles.productStatLabel}
+                                        >
+                                          Amount:
+                                        </ThemedText>
+                                        <ThemedText
+                                          style={styles.productStatValue}
+                                        >
+                                          ৳{product.SaleAmount}
+                                        </ThemedText>
+                                      </View>
+                                      <View style={styles.productStat}>
+                                        <ThemedText
+                                          style={styles.productStatLabel}
+                                        >
+                                          Paid:
+                                        </ThemedText>
+                                        <ThemedText
+                                          style={styles.productStatValue}
+                                        >
+                                          ৳{product.PaidAmount}
+                                        </ThemedText>
+                                      </View>
+                                      <View style={styles.productStat}>
+                                        <ThemedText
+                                          style={styles.productStatLabel}
+                                        >
+                                          Due:
+                                        </ThemedText>
+                                        <ThemedText
+                                          style={[
+                                            styles.productStatValue,
+                                            { color: "#DC3545" },
+                                          ]}
+                                        >
+                                          ৳{product.DueAmount.toFixed(2)}
+                                        </ThemedText>
+                                      </View>
+                                    </View>
+                                  </View>
+                                ))}
+                              </View>
+                            )}
+                        </View>
+                      ))}
+                  </View>
+
+                  {(!customerDetails?.transactions ||
+                    customerDetails.transactions.filter(
+                      (t) =>
+                        (t.PaymentStatus === "Unpaid" ||
+                          t.PaymentStatus === "Partial") &&
+                        t.DueAmount > 0,
+                    ).length === 0) && (
+                    <View style={styles.noTransactionsCard}>
+                      <MaterialIcons name="info" size={40} color="#999" />
+                      <ThemedText style={styles.noTransactionsText}>
+                        No unpaid or partial transactions found
+                      </ThemedText>
+                    </View>
+                  )}
+
+                  <View style={styles.selectedSummary}>
+                    <View style={styles.selectedInfo}>
+                      <MaterialIcons
+                        name="check-circle"
+                        size={16}
+                        color="#28A745"
+                      />
+                      <ThemedText style={styles.selectedCountText}>
+                        Selected: {selectedTransactions.length}
+                      </ThemedText>
+                    </View>
+                    <View style={styles.selectedTotalInfo}>
+                      <ThemedText style={styles.selectedTotalLabel}>
+                        Total Due:
+                      </ThemedText>
+                      <ThemedText style={styles.selectedTotalValue}>
+                        ৳{calculateTotalSelectedAmount().toFixed(2)}
+                      </ThemedText>
+                    </View>
+                  </View>
+                </>
+              )}
+
+              <ThemedText style={styles.fieldLabel}>
+                Payment Amount *
+              </ThemedText>
+              <TextInput
+                style={styles.inputField}
+                keyboardType="numeric"
+                placeholder="Enter payment amount"
+                value={paymentAmount}
+                onChangeText={setPaymentAmount}
+              />
+
+              <ThemedText style={styles.fieldLabel}>Payment Date *</ThemedText>
+              <TouchableOpacity
+                style={styles.inputField}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <ThemedText>{paymentDate.toLocaleDateString()}</ThemedText>
+              </TouchableOpacity>
+
+              {showDatePicker && (
+                <DateTimePicker
+                  value={paymentDate}
+                  mode="date"
+                  display="default"
+                  onChange={(event, selectedDate) => {
+                    setShowDatePicker(false);
+                    if (selectedDate) {
+                      setPaymentDate(selectedDate);
+                    }
+                  }}
+                />
+              )}
+
+              <ThemedText style={styles.fieldLabel}>Payment Method</ThemedText>
+              <View style={styles.methodContainer}>
+                {["Cash", "Bank", "bKash"].map((m) => (
                   <TouchableOpacity
+                    key={m}
                     style={[
-                      styles.searchActionBtn,
-                      { backgroundColor: "#28A745" },
+                      styles.methodTab,
+                      paymentMethod === m && styles.methodTabActive,
                     ]}
-                    onPress={handleMakeBulkPayment}
-                    disabled={submitting}
+                    onPress={() => setPaymentMethod(m)}
                   >
-                    {submitting ? (
-                      <ActivityIndicator size="small" color="white" />
-                    ) : (
-                      <ThemedText style={styles.btnTxtWhite}>
-                        Submit Bulk
-                      </ThemedText>
-                    )}
+                    <ThemedText
+                      style={
+                        paymentMethod === m
+                          ? { color: "#fff" }
+                          : { color: "#333" }
+                      }
+                    >
+                      {m}
+                    </ThemedText>
                   </TouchableOpacity>
-                </View>
-              </ScrollView>
-            </View>
+                ))}
+              </View>
+
+              <ThemedText style={styles.fieldLabel}>
+                Reference ID (Optional)
+              </ThemedText>
+              <TextInput
+                style={styles.inputField}
+                placeholder="Enter reference number"
+                value={referenceNo}
+                onChangeText={setReferenceNo}
+              />
+
+              <ThemedText style={styles.fieldLabel}>
+                Remarks (Optional)
+              </ThemedText>
+              <TextInput
+                style={[styles.inputField, styles.textArea]}
+                placeholder="Add specific note..."
+                value={remarks}
+                onChangeText={setRemarks}
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+              />
+
+              <View
+                style={[styles.filterRow, { marginTop: 20, marginBottom: 10 }]}
+              >
+                <TouchableOpacity
+                  style={[styles.filterBtn, { borderColor: "#dc3545" }]}
+                  onPress={() => {
+                    setBulkModalVisible(false);
+                    setPaymentAmount("");
+                    setReferenceNo("");
+                    setRemarks("");
+                    setPaymentMethod("Cash");
+                    setPaymentDate(new Date());
+                    setSelectedCustomer(null);
+                    setCustomerDetails(null);
+                    setSelectedTransactions([]);
+                    setExpandedTransactions(new Set());
+                  }}
+                >
+                  <ThemedText style={{ color: "#dc3545" }}>Cancel</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.searchActionBtn,
+                    { backgroundColor: "#28A745" },
+                  ]}
+                  onPress={handleMakeBulkPayment}
+                  disabled={
+                    submitting ||
+                    loadingDetails ||
+                    selectedTransactions.length === 0
+                  }
+                >
+                  {submitting ? (
+                    <ActivityIndicator size="small" color="white" />
+                  ) : (
+                    <ThemedText style={styles.btnTxtWhite}>
+                      Submit Payment
+                    </ThemedText>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
-        </TouchableWithoutFeedback>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1007,10 +1584,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
   },
   statsIcon: {
     width: 40,
@@ -1041,15 +1614,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "flex-start",
   },
-  customerInfo: {
-    flex: 1,
-  },
-  customerName: {
-    fontSize: 15,
-    fontWeight: "bold",
-    color: "#333",
-    textTransform: "capitalize",
-  },
+  customerInfo: { flex: 1 },
+  customerName: { fontSize: 15, fontWeight: "bold", color: "#333" },
   phoneTxt: { fontSize: 12, color: "#666", marginTop: 2 },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
   statusText: { fontSize: 10, fontWeight: "bold" },
@@ -1061,7 +1627,7 @@ const styles = StyleSheet.create({
   infoVal: { fontSize: 13, fontWeight: "bold", marginTop: 2 },
   lastDate: { fontSize: 11, color: "#888", marginTop: 10, fontStyle: "italic" },
 
-  actionRow: { flexDirection: "row", marginTop: 15 },
+  actionRow: { flexDirection: "row", marginTop: 15, gap: 10 },
   actionBtn: {
     flex: 1,
     flexDirection: "row",
@@ -1114,8 +1680,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8F9FA",
     padding: 12,
     borderRadius: 8,
-    marginBottom: 15,
     alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
   },
   customerNameLarge: {
     fontSize: 18,
@@ -1123,10 +1691,7 @@ const styles = StyleSheet.create({
     color: "#093",
     marginBottom: 4,
   },
-  customerPhoneLarge: {
-    fontSize: 14,
-    color: "#666",
-  },
+  customerPhoneLarge: { fontSize: 14, color: "#666" },
   fieldLabel: {
     fontSize: 13,
     color: "#555",
@@ -1144,19 +1709,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#fff",
   },
-  textArea: {
-    height: 80,
-    paddingTop: 10,
-  },
-  disabledField: {
-    backgroundColor: "#F5F5F5",
-    borderColor: "#E0E0E0",
-  },
-  dueAmountText: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#DC3545",
-  },
+  textArea: { height: 80, paddingTop: 10 },
+  disabledField: { backgroundColor: "#F5F5F5", borderColor: "#E0E0E0" },
+  dueAmountText: { fontSize: 16, fontWeight: "bold", color: "#DC3545" },
   methodContainer: { flexDirection: "row", gap: 8, marginVertical: 5 },
   methodTab: {
     flex: 1,
@@ -1169,4 +1724,192 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
   methodTabActive: { backgroundColor: "#28A745", borderColor: "#28A745" },
+
+  dueSummaryBox: {
+    backgroundColor: "#E8F5E9",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 15,
+  },
+  dueSummaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 5,
+  },
+  dueSummaryLabel: { fontSize: 13, color: "#555" },
+  dueSummaryValue: { fontSize: 13, fontWeight: "bold", color: "#333" },
+  selectAllBtn: {
+    backgroundColor: "#007BFF",
+    padding: 10,
+    borderRadius: 8,
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  selectAllText: { color: "white", fontSize: 13, fontWeight: "bold" },
+
+  transactionsList: {
+    marginBottom: 10,
+  },
+  transactionItem: {
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    borderRadius: 10,
+    marginBottom: 10,
+    backgroundColor: "#fff",
+    overflow: "hidden",
+  },
+  transactionCheckboxRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    gap: 10,
+  },
+  transactionInfoArea: {
+    flex: 1,
+  },
+  transactionHeaderInfo: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  transactionNumber: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#333",
+  },
+  statusBadgeSmall: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  statusTextSmall: {
+    fontSize: 10,
+    fontWeight: "bold",
+  },
+  transactionDate: {
+    fontSize: 11,
+    color: "#666",
+    marginBottom: 4,
+  },
+  transactionAmounts: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 4,
+  },
+  transactionTotalAmount: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#093",
+  },
+  transactionDueAmount: {
+    fontSize: 12,
+    fontWeight: "bold",
+    color: "#DC3545",
+  },
+  expandIcon: {
+    position: "absolute",
+    right: 0,
+    top: 44,
+  },
+  productsSection: {
+    padding: 12,
+    backgroundColor: "#F8F9FA",
+    borderTopWidth: 1,
+    borderTopColor: "#E0E0E0",
+  },
+  productsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+    gap: 8,
+  },
+  productsTitle: {
+    fontSize: 13,
+    fontWeight: "bold",
+    color: "#093",
+  },
+  productCard: {
+    backgroundColor: "#fff",
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
+  },
+  productName: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 8,
+  },
+  productStats: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  productStat: {
+    flex: 1,
+    minWidth: 80,
+  },
+  productStatLabel: {
+    fontSize: 10,
+    color: "#666",
+  },
+  productStatValue: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#333",
+    marginTop: 2,
+  },
+  noTransactionsCard: {
+    alignItems: "center",
+    padding: 30,
+    backgroundColor: "#F8F9FA",
+    borderRadius: 8,
+  },
+  noTransactionsText: {
+    textAlign: "center",
+    color: "#999",
+    marginTop: 10,
+  },
+  selectedSummary: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#E8F5E9",
+    borderRadius: 8,
+    marginBottom: 10,
+    marginTop: 5,
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  selectedInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  selectedCountText: {
+    fontSize: 12,
+    fontWeight: "bold",
+    color: "#093",
+  },
+  selectedTotalInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  selectedTotalLabel: {
+    fontSize: 12,
+    color: "#555",
+  },
+  selectedTotalValue: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#DC3545",
+  },
 });
