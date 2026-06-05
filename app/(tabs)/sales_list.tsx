@@ -439,12 +439,18 @@ export default function SalesListScreen() {
   const fetchTransactions = async () => {
     try {
       setError(null);
+      setLoading(true);
+
       const response = await fetch(API_URL, {
         method: "GET",
         headers: {
           Authorization: `Bearer ${API_KEY}`,
           "Content-Type": "application/json",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+          Pragma: "no-cache",
+          Expires: "0",
         },
+        cache: "no-cache",
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -748,10 +754,10 @@ export default function SalesListScreen() {
                       <TouchableOpacity
                         style={[styles.actionBtn, styles.editBtn]}
                         onPress={() => {
-                          Alert.alert(
-                            "Edit",
-                            `Edit transaction ${item.TransactionNumber}`,
-                          );
+                          router.push({
+                            pathname: "/Edit_Transaction",
+                            params: { transactionId: item.TransactionId },
+                          });
                         }}
                       >
                         <ThemedText style={styles.actionBtnText}>
