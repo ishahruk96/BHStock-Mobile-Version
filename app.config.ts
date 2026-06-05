@@ -46,6 +46,7 @@ const config: ExpoConfig = {
   android: {
     package: env.androidPackage,
     edgeToEdgeEnabled: true,
+    softwareKeyboardLayoutMode: "resize",
     predictiveBackGestureEnabled: false,
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",

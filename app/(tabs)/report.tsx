@@ -1,134 +1,300 @@
-import { ThemedText } from "@/components/themed-text";
+import React, { useState, useEffect, useRef } from "react";
 import {
-  FontAwesome5,
-  Ionicons,
-  MaterialCommunityIcons,
-} from "@expo/vector-icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
-import React, { useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  RefreshControl,
-  ScrollView,
   StyleSheet,
-  TextInput,
-  TouchableOpacity,
   View,
+  TouchableOpacity,
+  ScrollView,
+  TextInput,
+  ActivityIndicator,
+  RefreshControl,
+  Alert,
+  Platform,
+  Linking,
 } from "react-native";
+import { ThemedText } from "@/components/themed-text";
+import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-icons";
+import DateTimePicker from '@react-native-community/datetimepicker';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 
 const API_KEY = "3A734AC6-A521-4192-984D-08D082B83456";
 const BASE_URL = "http://devmystock.byteheart.com";
 
-interface StockReportItem {
-  SL: number;
-  Category: string;
-  ProductName: string;
-  OpeningStock: number;
-  UnitPrice: number;
-  SalesValue: number;
-  Profit: number;
-  ProfitPercentage: number;
-  QtySold: number;
-  SoldAmount: number;
-  ClosingStock: number;
-  TotalProfit: number;
-  DailyExpense: number;
-  StockValue: number;
-  Status: string;
-  ProductId: number;
-}
-
-interface TransactionDetail {
-  TransactionId: number;
-  TransactionNumber: string;
-  TransactionType: string;
-  TransactionDate: string;
-  ProductName: string | null;
-  Quantity: number;
-  Amount: number;
-  DueAmount: number | null;
-  PaymentStatus: string;
-  CustomerName: string;
-  EntryType: string;
-}
-
-interface PaymentSummary {
-  TransactionNumber: string;
-  TransactionDate: string;
-  CustomerName: string;
-  TotalSale: number;
-  TotalPaid: number;
-  TotalRefund: number;
-  TotalDue: number;
-  PaymentStatus: string;
-}
-
 export default function StockReportScreen() {
   const [activeTab, setActiveTab] = useState("Stock Report");
-  const [reportPeriod, setReportPeriod] = useState("daily"); // daily or range
-
-  // Date states
+  const [reportPeriod, setReportPeriod] = useState("daily");
+  
   const [singleDate, setSingleDate] = useState(new Date());
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(new Date());
-
-  // Picker states
+  
   const [showSinglePicker, setShowSinglePicker] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
-
-  // Data states
-  const [stockData, setStockData] = useState<StockReportItem[]>([]);
-  const [transactionData, setTransactionData] = useState<TransactionDetail[]>(
-    [],
-  );
-  const [paymentSummaryData, setPaymentSummaryData] = useState<
-    PaymentSummary[]
-  >([]);
-
-  // UI states
+  
+  const [stockData, setStockData] = useState<any[]>([]);
+  const [transactionData, setTransactionData] = useState<any[]>([]);
+  const [paymentSummaryData, setPaymentSummaryData] = useState<any[]>([]);
+  
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  
+  const [shopName, setShopName] = useState("BH Fish Mart");
+  const [shopAddress, setShopAddress] = useState("Uttara 1230");
+  const [reportPeriodText, setReportPeriodText] = useState("");
+  const [reportDate, setReportDate] = useState("");
+  
+  const searchInputRef = useRef<TextInput>(null);
 
-  // Format date for API (yyyy-mm-dd)
+  const getHeaders = () => ({
+    "Authorization": `Bearer ${API_KEY}`,
+    "Content-Type": "application/json",
+  });
+
   const formatDateForAPI = (date: Date) => {
     const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   };
 
-  // Format date for display (dd/mm/yyyy)
   const formatDateForDisplay = (date: Date) => {
-    const day = String(date.getDate()).padStart(2, "0");
-    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
     const year = date.getFullYear();
     return `${day}/${month}/${year}`;
   };
 
-  // Convert JSON date to readable format
   const convertJsonDate = (jsonDate: string): string => {
     if (!jsonDate) return "N/A";
     const match = jsonDate.match(/\/Date\((\d+)\)\//);
     if (match) {
       const date = new Date(parseInt(match[1]));
-      const day = String(date.getDate()).padStart(2, "0");
-      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
       const year = date.getFullYear();
-      const hours = String(date.getHours()).padStart(2, "0");
-      const minutes = String(date.getMinutes()).padStart(2, "0");
-      return `${day}/${month}/${year} ${hours}:${minutes}`;
+      return `${day}/${month}/${year}`;
     }
     return jsonDate;
   };
 
-  // Fetch Stock Report with date filter
-  const fetchStockReport = async () => {
+  const getCurrentDateRange = () => {
+    if (reportPeriod === "daily") {
+      const date = formatDateForAPI(singleDate);
+      return { startDate: date, endDate: date };
+    } else {
+      return {
+        startDate: formatDateForAPI(startDate),
+        endDate: formatDateForAPI(endDate),
+      };
+    }
+  };
+
+  // Download file helper function - Fixed version
+  const downloadAndShareFile = async (url: string, fileName: string, fileType: string) => {
+    try {
+      setDownloading(true);
+      const { startDate, endDate } = getCurrentDateRange();
+      const fullUrl = `${BASE_URL}${url}?startDate=${startDate}&endDate=${endDate}`;
+      
+      console.log("Downloading from:", fullUrl);
+      
+      const response = await fetch(fullUrl, {
+        method: "GET",
+        headers: getHeaders(),
+      });
+      
+      const result = await response.json();
+      console.log("Download response:", result);
+      
+      if (result.success && result.filePath) {
+        const fileUrl = `${BASE_URL}${result.filePath}`;
+        
+        // Check if sharing is available
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUrl, {
+            mimeType: fileType === 'excel' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
+                     fileType === 'csv' ? 'text/csv' :
+                     'application/pdf',
+            dialogTitle: `Save ${fileName}`,
+          });
+          Alert.alert("Success", `${fileName} downloaded successfully!`);
+        } else {
+          // Fallback: Open in browser
+          await Linking.openURL(fileUrl);
+          Alert.alert("Success", `${fileName} is being downloaded in your browser`);
+        }
+      } else {
+        Alert.alert("Error", result.message || "Failed to generate file");
+      }
+    } catch (error) {
+      console.error("Download error:", error);
+      Alert.alert("Error", "Failed to download file. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  // Export functions
+  const exportToExcel = async () => {
+    await downloadAndShareFile("/Report/ExportToExcel", "Stock_Report", "excel");
+  };
+
+  const exportSummary = async () => {
+    await downloadAndShareFile("/Report/ExportSummary", "Summary_Report", "excel");
+  };
+
+  const exportToCSV = async () => {
+    await downloadAndShareFile("/Report/ExportCSV", "Stock_Report", "csv");
+  };
+
+  const exportToPDF = async () => {
+    await downloadAndShareFile("/Report/ExportPDF", "Stock_Report", "pdf");
+  };
+
+  // Print Report - Fixed without FileSystem
+  const printReport = async () => {
+    try {
+      setDownloading(true);
+      const { startDate, endDate } = getCurrentDateRange();
+      const fullUrl = `${BASE_URL}/Report/Print?startDate=${startDate}&endDate=${endDate}`;
+      
+      console.log("Printing from:", fullUrl);
+      
+      const response = await fetch(fullUrl, {
+        method: "GET",
+        headers: getHeaders(),
+      });
+      
+      const result = await response.json();
+      console.log("Print response:", result);
+      
+      if (result.success && result.isData && result.data) {
+        const summary = result.data.Summary;
+        const printData = {
+          shopName: result.data.ShopName,
+          address: result.data.Address,
+          reportPeriod: result.data.ReportPeriod,
+          summary: summary
+        };
+        
+        // Show alert with summary
+        Alert.alert(
+          "Print Report Summary",
+          `Shop: ${printData.shopName}\n` +
+          `Address: ${printData.address}\n` +
+          `Period: ${printData.reportPeriod}\n\n` +
+          `📊 SUMMARY:\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `Total Sales: $${summary.TotalSales?.toFixed(2) || '0.00'}\n` +
+          `Total Profit: $${summary.TotalProfit?.toFixed(2) || '0.00'}\n` +
+          `Total Expense: $${summary.TotalExpense?.toFixed(2) || '0.00'}\n` +
+          `Net Profit: $${summary.NetProfit?.toFixed(2) || '0.00'}\n` +
+          `Total Stock Value: $${summary.TotalStockValue?.toFixed(2) || '0.00'}\n\n` +
+          `📦 Products Status:\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `Total Products: ${summary.TotalProducts || 0}\n` +
+          `Available: ${summary.AvailableCount || 0}\n` +
+          `Out of Stock: ${summary.OutOfStockCount || 0}\n` +
+          `Need Reorder: ${summary.ReorderCount || 0}\n\n` +
+          `💰 Payment Info:\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `Total Paid: $${summary.TotalPayments?.toFixed(2) || '0.00'}\n` +
+          `Total Due: $${summary.TotalDue?.toFixed(2) || '0.00'}\n` +
+          `Net Cash Flow: $${summary.NetCashFlow?.toFixed(2) || '0.00'}`,
+          [
+            { text: "Close", style: "cancel" },
+            { 
+              text: "Share Report", 
+              onPress: () => shareReportData(printData)
+            },
+            { 
+              text: "Open in Browser", 
+              onPress: () => Linking.openURL(fullUrl)
+            }
+          ]
+        );
+      } else {
+        Alert.alert("Error", "Failed to generate print report");
+      }
+    } catch (error) {
+      console.error("Print error:", error);
+      Alert.alert("Error", "Failed to print report. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  // Share report data as text - Fixed without FileSystem
+  const shareReportData = async (data: any) => {
+    try {
+      // Create formatted text report
+      const reportText = `
+STOCK REPORT SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SHOP INFORMATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Shop Name: ${data.shopName}
+Address: ${data.address}
+Report Period: ${data.reportPeriod}
+Generated: ${new Date().toLocaleString()}
+
+FINANCIAL SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Sales: $${data.summary.TotalSales?.toFixed(2) || '0.00'}
+Total Profit: $${data.summary.TotalProfit?.toFixed(2) || '0.00'}
+Total Expense: $${data.summary.TotalExpense?.toFixed(2) || '0.00'}
+Net Profit: $${data.summary.NetProfit?.toFixed(2) || '0.00'}
+Total Stock Value: $${data.summary.TotalStockValue?.toFixed(2) || '0.00'}
+
+PRODUCT STATUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Products: ${data.summary.TotalProducts || 0}
+Available Products: ${data.summary.AvailableCount || 0}
+Out of Stock: ${data.summary.OutOfStockCount || 0}
+Need Reorder: ${data.summary.ReorderCount || 0}
+
+PAYMENT INFORMATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Paid: $${data.summary.TotalPayments?.toFixed(2) || '0.00'}
+Total Refunds: $${data.summary.TotalRefunds?.toFixed(2) || '0.00'}
+Total Due: $${data.summary.TotalDue?.toFixed(2) || '0.00'}
+Net Cash Flow: $${data.summary.NetCashFlow?.toFixed(2) || '0.00'}
+
+TRANSACTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Paid Transactions: ${data.summary.PaidTransactions || 0}
+Partial Transactions: ${data.summary.PartialTransactions || 0}
+Unpaid Transactions: ${data.summary.UnpaidTransactions || 0}
+Returns: ${data.summary.ReturnCount || 0}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Report Generated by Stock Management System
+      `;
+      
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(reportText, {
+          mimeType: 'text/plain',
+          dialogTitle: 'Share Stock Report',
+        });
+      } else {
+        Alert.alert("Info", "Sharing is not available on this device");
+      }
+    } catch (error) {
+      console.error("Share error:", error);
+      Alert.alert("Error", "Failed to share report");
+    }
+  };
+
+  // Rest of your existing functions (filterReport, fetchStockReport, etc.)
+  const filterReport = async () => {
     try {
       let filterStartDate, filterEndDate;
-
+      
       if (reportPeriod === "daily") {
         filterStartDate = formatDateForAPI(singleDate);
         filterEndDate = formatDateForAPI(singleDate);
@@ -136,39 +302,57 @@ export default function StockReportScreen() {
         filterStartDate = formatDateForAPI(startDate);
         filterEndDate = formatDateForAPI(endDate);
       }
-
-      const response = await fetch(`${BASE_URL}/Report/GenerateReport`, {
+      
+      const response = await fetch(`${BASE_URL}/Report/FilterReport`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          apikey: API_KEY,
-        },
+        headers: getHeaders(),
         body: JSON.stringify({
           StartDate: filterStartDate,
           EndDate: filterEndDate,
         }),
       });
       const result = await response.json();
-      console.log("Stock report response:", result);
+      console.log("Filter Report Result:", result);
+    } catch (error) {
+      console.error("Filter error:", error);
+    }
+  };
 
-      if (Array.isArray(result)) {
-        setStockData(result);
-      } else if (result && result.data && Array.isArray(result.data)) {
-        setStockData(result.data);
+  const fetchStockReport = async () => {
+    try {
+      setApiError(null);
+      const response = await fetch(`${BASE_URL}/Report/GenerateReport`, {
+        method: "GET",
+        headers: getHeaders(),
+      });
+      
+      const result = await response.json();
+      
+      if (result && result.data) {
+        if (result.data.ShopName) setShopName(result.data.ShopName);
+        if (result.data.Address) setShopAddress(result.data.Address);
+        if (result.data.ReportPeriod) setReportPeriodText(result.data.ReportPeriod);
+        if (result.data.ReportDate) setReportDate(convertJsonDate(result.data.ReportDate));
+        
+        if (result.data.Items && Array.isArray(result.data.Items)) {
+          setStockData(result.data.Items);
+        } else {
+          setStockData([]);
+        }
       } else {
         setStockData([]);
       }
     } catch (error) {
       console.error("Stock report error:", error);
+      setApiError("Failed to fetch stock report");
       setStockData([]);
     }
   };
 
-  // Fetch Transaction Details with date filter
   const fetchTransactionDetails = async () => {
     try {
       let filterStartDate, filterEndDate;
-
+      
       if (reportPeriod === "daily") {
         filterStartDate = formatDateForAPI(singleDate);
         filterEndDate = formatDateForAPI(singleDate);
@@ -176,17 +360,13 @@ export default function StockReportScreen() {
         filterStartDate = formatDateForAPI(startDate);
         filterEndDate = formatDateForAPI(endDate);
       }
-
-      const url = `${BASE_URL}/Report/GetTransactionDetails?startDate=${filterStartDate}&endDate=${filterEndDate}`;
-      console.log("Transaction URL:", url);
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: { apikey: API_KEY },
-      });
+      
+      const response = await fetch(
+        `${BASE_URL}/Report/GetTransactionDetails?startDate=${filterStartDate}&endDate=${filterEndDate}`,
+        { headers: getHeaders() }
+      );
       const result = await response.json();
-      console.log("Transaction response:", result);
-
+      
       if (Array.isArray(result)) {
         setTransactionData(result);
       } else if (result && result.data && Array.isArray(result.data)) {
@@ -200,11 +380,10 @@ export default function StockReportScreen() {
     }
   };
 
-  // Fetch Payment Summary with date filter
   const fetchPaymentSummary = async () => {
     try {
       let filterStartDate, filterEndDate;
-
+      
       if (reportPeriod === "daily") {
         filterStartDate = formatDateForAPI(singleDate);
         filterEndDate = formatDateForAPI(singleDate);
@@ -212,17 +391,13 @@ export default function StockReportScreen() {
         filterStartDate = formatDateForAPI(startDate);
         filterEndDate = formatDateForAPI(endDate);
       }
-
-      const url = `${BASE_URL}/Report/GetPaymentSummary?startDate=${filterStartDate}&endDate=${filterEndDate}`;
-      console.log("Payment summary URL:", url);
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: { apikey: API_KEY },
-      });
+      
+      const response = await fetch(
+        `${BASE_URL}/Report/GetPaymentSummary?startDate=${filterStartDate}&endDate=${filterEndDate}`,
+        { headers: getHeaders() }
+      );
       const result = await response.json();
-      console.log("Payment summary response:", result);
-
+      
       if (Array.isArray(result)) {
         setPaymentSummaryData(result);
       } else if (result && result.data && Array.isArray(result.data)) {
@@ -238,7 +413,8 @@ export default function StockReportScreen() {
 
   const loadData = async () => {
     setLoading(true);
-
+    await filterReport();
+    
     if (activeTab === "Stock Report") {
       await fetchStockReport();
     } else if (activeTab === "Financial") {
@@ -246,7 +422,7 @@ export default function StockReportScreen() {
     } else if (activeTab === "Transaction") {
       await fetchTransactionDetails();
     }
-
+    
     setLoading(false);
   };
 
@@ -260,460 +436,217 @@ export default function StockReportScreen() {
     loadData();
   }, [activeTab, reportPeriod, singleDate, startDate, endDate]);
 
-  const getCurrentData = () => {
-    if (activeTab === "Stock Report") return stockData;
-    if (activeTab === "Financial") return paymentSummaryData;
-    return transactionData;
-  };
-
   const getFilteredData = () => {
-    const data = getCurrentData();
+    let data: any[] = [];
+    if (activeTab === "Stock Report") data = stockData;
+    else if (activeTab === "Financial") data = paymentSummaryData;
+    else data = transactionData;
+    
     if (!searchQuery) return data;
-
+    
     const searchLower = searchQuery.toLowerCase();
     return data.filter((item: any) => {
       return JSON.stringify(item).toLowerCase().includes(searchLower);
     });
   };
 
-  // Render Stock Item
-  const renderStockItem = ({ item }: { item: StockReportItem }) => (
-    <View style={styles.stockCard}>
-      <View style={styles.cardHeader}>
+  // Table Components (keep your existing table components)
+  const StockFullTable = () => {
+    const data = getFilteredData();
+    
+    return (
+      <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollView}>
         <View>
-          <ThemedText style={styles.categoryBadgeText}>
-            {item.Category}
-          </ThemedText>
-          <ThemedText style={styles.productName}>{item.ProductName}</ThemedText>
-        </View>
-        <View
-          style={[
-            styles.statusBadge,
-            {
-              backgroundColor:
-                item.Status === "Available" ? "#e8f5e9" : "#fff3e0",
-            },
-          ]}
-        >
-          <ThemedText
-            style={[
-              styles.statusText,
-              { color: item.Status === "Available" ? "#2e7d32" : "#ef6c00" },
-            ]}
-          >
-            {item.Status}
-          </ThemedText>
-        </View>
-      </View>
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <View style={styles.dataGrid}>
-          <DataPoint label="SL" value={item.SL?.toString()} />
-          <DataPoint label="Product" value={item.ProductName} />
-          <DataPoint label="Opening" value={item.OpeningStock?.toFixed(2)} />
-          <DataPoint
-            label="Purchase Price"
-            value={`৳${item.UnitPrice?.toFixed(2)}`}
-          />
-          <DataPoint
-            label="Selling Price"
-            value={`৳${item.SalesValue?.toFixed(2)}`}
-          />
-          <DataPoint
-            label="Profit/Unit"
-            value={`৳${item.Profit?.toFixed(2)}`}
-          />
-          <DataPoint
-            label="Profit %"
-            value={`${item.ProfitPercentage?.toFixed(2)}%`}
-          />
-          <DataPoint label="Qty Sold" value={item.QtySold?.toFixed(2)} />
-          <DataPoint
-            label="Sales Amount"
-            value={`৳${item.SoldAmount?.toFixed(2)}`}
-          />
-          <DataPoint label="Closing" value={item.ClosingStock?.toFixed(2)} />
-          <DataPoint
-            label="Total Profit"
-            value={`৳${item.TotalProfit?.toFixed(2)}`}
-          />
-          <DataPoint
-            label="Stock Value"
-            value={`৳${item.StockValue?.toFixed(2)}`}
-          />
-          <DataPoint
-            label="Daily Expense"
-            value={`৳${item.DailyExpense?.toFixed(2)}`}
-          />
-        </View>
-      </ScrollView>
-    </View>
-  );
-
-  // Render Transaction Item
-  const renderTransactionItem = ({ item }: { item: TransactionDetail }) => (
-    <View style={styles.stockCard}>
-      <View style={styles.cardHeader}>
-        <View>
-          <ThemedText style={styles.transactionNumber}>
-            {item.TransactionNumber}
-          </ThemedText>
-          <ThemedText style={styles.transactionType}>
-            {item.TransactionType}
-          </ThemedText>
-        </View>
-        <View
-          style={[
-            styles.statusBadge,
-            {
-              backgroundColor:
-                item.PaymentStatus === "Paid" ? "#e8f5e9" : "#fff3e0",
-            },
-          ]}
-        >
-          <ThemedText
-            style={[
-              styles.statusText,
-              { color: item.PaymentStatus === "Paid" ? "#2e7d32" : "#ef6c00" },
-            ]}
-          >
-            {item.PaymentStatus}
-          </ThemedText>
-        </View>
-      </View>
-
-      <View style={styles.transactionGrid}>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Date & Time:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {convertJsonDate(item.TransactionDate)}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>
-            Transaction #:
-          </ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {item.TransactionNumber}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Type:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {item.TransactionType} ({item.EntryType})
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Product:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {item.ProductName || "N/A"}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Qty:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {item.Quantity?.toFixed(2)}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Amount:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            ৳{item.Amount?.toFixed(2)}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Due:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            ৳{item.DueAmount?.toFixed(2) || "0.00"}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Customer:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {item.CustomerName}
-          </ThemedText>
-        </View>
-      </View>
-    </View>
-  );
-
-  // Render Payment Summary Item
-  const renderPaymentSummaryItem = ({ item }: { item: PaymentSummary }) => (
-    <View style={styles.stockCard}>
-      <View style={styles.cardHeader}>
-        <View>
-          <ThemedText style={styles.transactionNumber}>
-            {item.TransactionNumber}
-          </ThemedText>
-          <ThemedText style={styles.customerName}>
-            {item.CustomerName}
-          </ThemedText>
-        </View>
-        <View
-          style={[
-            styles.statusBadge,
-            {
-              backgroundColor:
-                item.PaymentStatus === "Paid" ? "#e8f5e9" : "#fff3e0",
-            },
-          ]}
-        >
-          <ThemedText
-            style={[
-              styles.statusText,
-              { color: item.PaymentStatus === "Paid" ? "#2e7d32" : "#ef6c00" },
-            ]}
-          >
-            {item.PaymentStatus}
-          </ThemedText>
-        </View>
-      </View>
-
-      <View style={styles.transactionGrid}>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Date & Time:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {convertJsonDate(item.TransactionDate)}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>
-            Transaction #:
-          </ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {item.TransactionNumber}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Customer:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            {item.CustomerName}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Total Sale:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            ৳{item.TotalSale?.toFixed(2)}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Total Paid:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            ৳{item.TotalPaid?.toFixed(2)}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Total Refund:</ThemedText>
-          <ThemedText style={styles.transactionValue}>
-            ৳{item.TotalRefund?.toFixed(2)}
-          </ThemedText>
-        </View>
-        <View style={styles.transactionRow}>
-          <ThemedText style={styles.transactionLabel}>Due:</ThemedText>
-          <ThemedText
-            style={[
-              styles.transactionValue,
-              { color: item.TotalDue > 0 ? "#dc3545" : "#28a745" },
-            ]}
-          >
-            ৳{item.TotalDue?.toFixed(2)}
-          </ThemedText>
-        </View>
-      </View>
-    </View>
-  );
-
-  const HeaderComponent = () => (
-    <>
-      <View style={styles.blueHeader}>
-        <View style={styles.headerTitleRow}>
-          <MaterialCommunityIcons name="chart-bar" size={24} color="white" />
-          <ThemedText style={styles.headerTitleText}>Stock Report</ThemedText>
-        </View>
-        <ThemedText style={styles.headerSubText}>
-          Generate stock reports by date or range
-        </ThemedText>
-      </View>
-
-      <View style={styles.filterCard}>
-        <ThemedText style={styles.filterLabel}>Select Report Period</ThemedText>
-        <View style={styles.periodBtnRow}>
-          <TouchableOpacity
-            style={[
-              styles.periodBtn,
-              reportPeriod === "daily" && styles.periodBtnActive,
-            ]}
-            onPress={() => setReportPeriod("daily")}
-          >
-            <ThemedText
-              style={[
-                styles.periodBtnText,
-                reportPeriod === "daily" && styles.periodBtnTextActive,
-              ]}
-            >
-              Daily Report
-            </ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.periodBtn,
-              reportPeriod === "range" && styles.periodBtnActive,
-            ]}
-            onPress={() => setReportPeriod("range")}
-          >
-            <ThemedText
-              style={[
-                styles.periodBtnText,
-                reportPeriod === "range" && styles.periodBtnTextActive,
-              ]}
-            >
-              Date Range Report
-            </ThemedText>
-          </TouchableOpacity>
-        </View>
-
-        {reportPeriod === "daily" ? (
-          <TouchableOpacity
-            style={styles.dateSelector}
-            onPress={() => setShowSinglePicker(true)}
-          >
-            <Ionicons name="calendar-outline" size={18} color="#666" />
-            <ThemedText style={styles.dateText}>
-              {formatDateForDisplay(singleDate)}
-            </ThemedText>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.dateRangeContainer}>
-            <TouchableOpacity
-              style={styles.dateSelector}
-              onPress={() => setShowStartPicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={18} color="#666" />
-              <ThemedText style={styles.dateText}>
-                Start: {formatDateForDisplay(startDate)}
-              </ThemedText>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.dateSelector}
-              onPress={() => setShowEndPicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={18} color="#666" />
-              <ThemedText style={styles.dateText}>
-                End: {formatDateForDisplay(endDate)}
-              </ThemedText>
-            </TouchableOpacity>
+          <View style={[styles.tableHeader, styles.border]}>
+            <View style={[styles.headerCell, { width: 40 }, styles.borderRight]}><ThemedText style={styles.headerText}>SL</ThemedText></View>
+            <View style={[styles.headerCell, { width: 120 }, styles.borderRight]}><ThemedText style={styles.headerText}>Product</ThemedText></View>
+            <View style={[styles.headerCell, { width: 70 }, styles.borderRight]}><ThemedText style={styles.headerText}>Opening</ThemedText></View>
+            <View style={[styles.headerCell, { width: 90 }, styles.borderRight]}><ThemedText style={styles.headerText}>Purchase Price</ThemedText></View>
+            <View style={[styles.headerCell, { width: 90 }, styles.borderRight]}><ThemedText style={styles.headerText}>Selling Price</ThemedText></View>
+            <View style={[styles.headerCell, { width: 80 }, styles.borderRight]}><ThemedText style={styles.headerText}>Profit/Unit</ThemedText></View>
+            <View style={[styles.headerCell, { width: 70 }, styles.borderRight]}><ThemedText style={styles.headerText}>Profit%</ThemedText></View>
+            <View style={[styles.headerCell, { width: 70 }, styles.borderRight]}><ThemedText style={styles.headerText}>Qty Sold</ThemedText></View>
+            <View style={[styles.headerCell, { width: 90 }, styles.borderRight]}><ThemedText style={styles.headerText}>Sales Amount</ThemedText></View>
+            <View style={[styles.headerCell, { width: 70 }, styles.borderRight]}><ThemedText style={styles.headerText}>Closing</ThemedText></View>
+            <View style={[styles.headerCell, { width: 90 }, styles.borderRight]}><ThemedText style={styles.headerText}>Total Profit</ThemedText></View>
+            <View style={[styles.headerCell, { width: 90 }, styles.borderRight]}><ThemedText style={styles.headerText}>Stock Value</ThemedText></View>
+            <View style={[styles.headerCell, { width: 80 }]}><ThemedText style={styles.headerText}>Status</ThemedText></View>
           </View>
-        )}
-
-        <TouchableOpacity style={styles.generateBtn} onPress={loadData}>
-          <Ionicons name="refresh" size={18} color="white" />
-          <ThemedText style={styles.generateBtnText}>
-            Generate Report
-          </ThemedText>
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.exportRow}
-      >
-        <ExportBtn icon="file-excel" color="#28a745" label="Excel" />
-        <ExportBtn icon="file-csv" color="#ffc107" label="CSV" />
-        <ExportBtn icon="file-pdf" color="#dc3545" label="PDF" />
-        <ExportBtn icon="print" color="#6c757d" label="Print" />
-      </ScrollView>
-
-      <View style={styles.orgInfo}>
-        <View style={styles.reportTitleBadge}>
-          <ThemedText style={styles.reportTitleText}>
-            {activeTab.toUpperCase()} REPORT (
-            {reportPeriod === "daily"
-              ? formatDateForDisplay(singleDate)
-              : `${formatDateForDisplay(startDate)} - ${formatDateForDisplay(endDate)}`}
-            )
-          </ThemedText>
+          
+          {data.map((item, index) => (
+            <View key={index} style={[styles.tableRow, styles.border, index % 2 === 0 ? styles.rowEven : styles.rowOdd]}>
+              <View style={[styles.cell, { width: 40 }, styles.borderRight]}><ThemedText>{item.SL || index + 1}</ThemedText></View>
+              <View style={[styles.cell, { width: 120 }, styles.borderRight]}><ThemedText numberOfLines={2}>{item.ProductName || "N/A"}</ThemedText></View>
+              <View style={[styles.cell, { width: 70 }, styles.borderRight]}><ThemedText>{item.OpeningStock?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 90 }, styles.borderRight]}><ThemedText>{item.UnitPrice?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 90 }, styles.borderRight]}><ThemedText>{item.SalesValue?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 80 }, styles.borderRight]}><ThemedText>{item.Profit?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 70 }, styles.borderRight]}><ThemedText>{item.ProfitPercentage?.toFixed(2) || "0"}%</ThemedText></View>
+              <View style={[styles.cell, { width: 70 }, styles.borderRight]}><ThemedText>{item.QtySold?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 90 }, styles.borderRight]}><ThemedText>{item.SoldAmount?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 70 }, styles.borderRight]}><ThemedText>{item.ClosingStock?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 90 }, styles.borderRight]}><ThemedText>{item.TotalProfit?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 90 }, styles.borderRight]}><ThemedText style={{ fontWeight: 'bold', color: '#007bff' }}>{item.StockValue?.toFixed(2) || "0.00"}</ThemedText></View>
+              <View style={[styles.cell, { width: 80 }]}>
+                <View style={[styles.statusBadge, { backgroundColor: item.Status === "Available" ? "#e8f5e9" : "#fff3e0" }]}>
+                  <ThemedText style={[styles.statusText, { color: item.Status === "Available" ? "#2e7d32" : "#ef6c00" }]}>
+                    {item.Status || "N/A"}
+                  </ThemedText>
+                </View>
+              </View>
+            </View>
+          ))}
         </View>
-      </View>
+      </ScrollView>
+    );
+  };
 
-      <View style={styles.tabRow}>
-        {["Stock Report", "Financial", "Transaction"].map((tab) => (
-          <TouchableOpacity
-            key={tab}
-            onPress={() => setActiveTab(tab)}
-            style={[styles.tabItem, activeTab === tab && styles.tabItemActive]}
-          >
-            <ThemedText
-              style={[
-                styles.tabText,
-                activeTab === tab && styles.tabTextActive,
-              ]}
-            >
-              {tab}
-            </ThemedText>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <View style={styles.searchBox}>
-        <Ionicons name="search" size={18} color="#999" />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search product / category..."
-          placeholderTextColor="#999"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-      </View>
-    </>
-  );
+  const renderTable = () => {
+    if (loading) {
+      return (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#0056b3" />
+          <ThemedText style={styles.loadingText}>Loading data...</ThemedText>
+        </View>
+      );
+    }
+    
+    return <StockFullTable />;
+  };
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={getFilteredData()}
-        renderItem={({ item }) => {
-          if (activeTab === "Stock Report") {
-            return renderStockItem({ item: item as StockReportItem });
-          } else if (activeTab === "Financial") {
-            return renderPaymentSummaryItem({ item: item as PaymentSummary });
-          } else {
-            return renderTransactionItem({ item: item as TransactionDetail });
-          }
-        }}
-        keyExtractor={(item: any, index: number) => {
-          if (item?.TransactionId) return `txn-${item.TransactionId}`;
-          if (item?.SL) return `stock-${item.SL}`;
-          if (item?.TransactionNumber)
-            return `summary-${item.TransactionNumber}`;
-          return `item-${index}`;
-        }}
-        ListHeaderComponent={HeaderComponent}
-        ListEmptyComponent={
-          loading ? (
-            <View style={styles.emptyContainer}>
-              <ActivityIndicator size="large" color="#0056b3" />
-              <ThemedText style={styles.emptyText}>Loading...</ThemedText>
-            </View>
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="document-text-outline" size={48} color="#ccc" />
-              <ThemedText style={styles.emptyText}>No data found</ThemedText>
-              <ThemedText style={styles.emptySubText}>
-                Tap Generate Report to load data
-              </ThemedText>
-            </View>
-          )
-        }
+      {downloading && (
+        <View style={styles.downloadOverlay}>
+          <ActivityIndicator size="large" color="#0056b3" />
+          <ThemedText style={styles.downloadText}>Processing...</ThemedText>
+        </View>
+      )}
+      
+      <ScrollView
         contentContainerStyle={{ paddingBottom: 30 }}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={["#0056b3"]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#0056b3"]} />}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Blue Header */}
+        <View style={styles.blueHeader}>
+          <View style={styles.headerTitleRow}>
+            <MaterialCommunityIcons name="chart-bar" size={24} color="white" />
+            <ThemedText style={styles.headerTitleText}>Stock Report</ThemedText>
+          </View>
+          <ThemedText style={styles.headerSubText}>Generate stock reports by date or range</ThemedText>
+        </View>
+
+        {/* Filter Card */}
+        <View style={styles.filterCard}>
+          <ThemedText style={styles.filterLabel}>Select Report Period</ThemedText>
+          <View style={styles.periodBtnRow}>
+            <TouchableOpacity
+              style={[styles.periodBtn, reportPeriod === "daily" && styles.periodBtnActive]}
+              onPress={() => setReportPeriod("daily")}
+            >
+              <ThemedText style={[styles.periodBtnText, reportPeriod === "daily" && styles.periodBtnTextActive]}>
+                Daily Report
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.periodBtn, reportPeriod === "range" && styles.periodBtnActive]}
+              onPress={() => setReportPeriod("range")}
+            >
+              <ThemedText style={[styles.periodBtnText, reportPeriod === "range" && styles.periodBtnTextActive]}>
+                Date Range Report
+              </ThemedText>
+            </TouchableOpacity>
+          </View>
+
+          {reportPeriod === "daily" ? (
+            <TouchableOpacity style={styles.dateSelector} onPress={() => setShowSinglePicker(true)}>
+              <Ionicons name="calendar-outline" size={18} color="#666" />
+              <ThemedText style={styles.dateText}>{formatDateForDisplay(singleDate)}</ThemedText>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.dateRangeContainer}>
+              <TouchableOpacity style={styles.dateSelector} onPress={() => setShowStartPicker(true)}>
+                <Ionicons name="calendar-outline" size={18} color="#666" />
+                <ThemedText style={styles.dateText}>Start: {formatDateForDisplay(startDate)}</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.dateSelector} onPress={() => setShowEndPicker(true)}>
+                <Ionicons name="calendar-outline" size={18} color="#666" />
+                <ThemedText style={styles.dateText}>End: {formatDateForDisplay(endDate)}</ThemedText>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <TouchableOpacity style={styles.generateBtn} onPress={loadData}>
+            <Ionicons name="refresh" size={18} color="white" />
+            <ThemedText style={styles.generateBtnText}>Generate Report</ThemedText>
+          </TouchableOpacity>
+        </View>
+
+        {/* Export Buttons */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.exportRow}>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: "#28a745" }]} onPress={exportToExcel}>
+            <FontAwesome5 name="file-excel" size={14} color="white" />
+            <ThemedText style={styles.exportBtnText}>Excel</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: "#28a745" }]} onPress={exportSummary}>
+            <FontAwesome5 name="file-excel" size={14} color="white" />
+            <ThemedText style={styles.exportBtnText}>Summary</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: "#ffc107" }]} onPress={exportToCSV}>
+            <FontAwesome5 name="file-csv" size={14} color="white" />
+            <ThemedText style={styles.exportBtnText}>CSV</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: "#dc3545" }]} onPress={exportToPDF}>
+            <FontAwesome5 name="file-pdf" size={14} color="white" />
+            <ThemedText style={styles.exportBtnText}>PDF</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: "#17a2b8" }]} onPress={printReport}>
+            <FontAwesome5 name="print" size={14} color="white" />
+            <ThemedText style={styles.exportBtnText}>Print</ThemedText>
+          </TouchableOpacity>
+        </ScrollView>
+
+        {/* Org Info */}
+        <View style={styles.orgInfo}>
+          <ThemedText style={styles.orgName}>{shopName}</ThemedText>
+          <ThemedText style={styles.orgAddress}>{shopAddress}</ThemedText>
+          {reportPeriodText && <ThemedText style={styles.reportPeriod}>{reportPeriodText}</ThemedText>}
+          <View style={styles.reportTitleBadge}>
+            <ThemedText style={styles.reportTitleText}>{activeTab.toUpperCase()}</ThemedText>
+          </View>
+        </View>
+
+        {/* Search Box */}
+        <View style={styles.searchBox}>
+          <Ionicons name="search" size={18} color="#999" />
+          <TextInput
+            ref={searchInputRef}
+            style={styles.searchInput}
+            placeholder="Search..."
+            placeholderTextColor="#999"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            returnKeyType="search"
+            autoCorrect={false}
+            autoCapitalize="none"
           />
-        }
-      />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={18} color="#999" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {apiError && (
+          <View style={styles.errorContainer}>
+            <ThemedText style={styles.errorText}>Error: {apiError}</ThemedText>
+          </View>
+        )}
+
+        {/* Table */}
+        {renderTable()}
+      </ScrollView>
 
       {/* Date Pickers */}
       {showSinglePicker && (
@@ -727,7 +660,6 @@ export default function StockReportScreen() {
           }}
         />
       )}
-
       {showStartPicker && (
         <DateTimePicker
           value={startDate}
@@ -739,7 +671,6 @@ export default function StockReportScreen() {
           }}
         />
       )}
-
       {showEndPicker && (
         <DateTimePicker
           value={endDate}
@@ -755,208 +686,56 @@ export default function StockReportScreen() {
   );
 }
 
-const DataPoint = ({ label, value, isBold }: any) => (
-  <View style={styles.dataPoint}>
-    <ThemedText style={styles.dataLabel}>{label}</ThemedText>
-    <ThemedText
-      style={[
-        styles.dataValue,
-        isBold && { fontWeight: "bold", color: "#007bff" },
-      ]}
-    >
-      {value || "N/A"}
-    </ThemedText>
-  </View>
-);
-
-const ExportBtn = ({ icon, color, label }: any) => (
-  <TouchableOpacity style={[styles.exportBtn, { backgroundColor: color }]}>
-    <FontAwesome5 name={icon} size={14} color="white" />
-    <ThemedText style={styles.exportBtnText}>{label}</ThemedText>
-  </TouchableOpacity>
-);
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f0f2f5" },
-  blueHeader: {
-    backgroundColor: "#0056b3",
-    padding: 20,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-  },
-  headerTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  headerTitleText: { color: "white", fontSize: 20, fontWeight: "bold" },
-  headerSubText: { color: "rgba(255,255,255,0.8)", fontSize: 12, marginTop: 5 },
-
-  filterCard: {
-    backgroundColor: "white",
-    margin: 15,
-    borderRadius: 15,
-    padding: 15,
-    elevation: 3,
-    marginTop: -20,
-  },
-  filterLabel: { fontSize: 14, fontWeight: "bold", marginBottom: 10 },
-  periodBtnRow: { flexDirection: "row", gap: 10, marginBottom: 15 },
-  periodBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#007bff",
-    alignItems: "center",
-  },
-  periodBtnActive: { backgroundColor: "#007bff" },
-  periodBtnText: { color: "#007bff", fontSize: 12 },
-  periodBtnTextActive: { color: "white", fontSize: 12, fontWeight: "bold" },
-
-  dateSelector: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f8f9fa",
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#ddd",
-  },
+  blueHeader: { backgroundColor: "#0056b3", padding: 20, borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerTitleText: { color: 'white', fontSize: 20, fontWeight: 'bold' },
+  headerSubText: { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginTop: 5 },
+  filterCard: { backgroundColor: 'white', margin: 15, borderRadius: 15, padding: 15, elevation: 3, marginTop: -20 },
+  filterLabel: { fontSize: 14, fontWeight: 'bold', marginBottom: 10 },
+  periodBtnRow: { flexDirection: 'row', gap: 10, marginBottom: 15 },
+  periodBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#007bff', alignItems: 'center' },
+  periodBtnActive: { backgroundColor: '#007bff' },
+  periodBtnText: { color: '#007bff', fontSize: 12 },
+  periodBtnTextActive: { color: 'white', fontSize: 12, fontWeight: 'bold' },
+  dateSelector: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f8f9fa', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#ddd' },
   dateRangeContainer: { gap: 10 },
-  dateText: { marginLeft: 10, color: "#333" },
-
-  generateBtn: {
-    backgroundColor: "#0056b3",
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 15,
-  },
-  generateBtnText: { color: "white", fontWeight: "bold", marginLeft: 8 },
-
-  exportRow: { paddingHorizontal: 15, marginBottom: 15 },
-  exportBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 6,
-    marginRight: 8,
-  },
-  exportBtnText: {
-    color: "white",
-    marginLeft: 6,
-    fontSize: 12,
-    fontWeight: "bold",
-  },
-
-  orgInfo: { alignItems: "center", marginBottom: 15 },
-  orgName: { fontSize: 18, fontWeight: "bold", color: "#0056b3" },
-  orgAddress: { fontSize: 12, color: "#666" },
-  reportTitleBadge: {
-    backgroundColor: "#eef2f7",
-    paddingHorizontal: 15,
-    paddingVertical: 5,
-    borderRadius: 20,
-    marginTop: 8,
-  },
-  reportTitleText: { fontSize: 11, fontWeight: "bold", color: "#333" },
-
-  tabRow: {
-    flexDirection: "row",
-    backgroundColor: "white",
-    padding: 5,
-    marginHorizontal: 15,
-    borderRadius: 10,
-    marginBottom: 15,
-  },
-  tabItem: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: "center",
-    borderRadius: 8,
-  },
-  tabItemActive: { backgroundColor: "#007bff" },
-  tabText: { fontSize: 12, color: "#666" },
-  tabTextActive: { color: "white", fontWeight: "bold" },
-
-  searchBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "white",
-    marginHorizontal: 15,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    height: 45,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: "#eee",
-  },
-  searchInput: { flex: 1, marginLeft: 8, fontSize: 14 },
-
-  stockCard: {
-    backgroundColor: "white",
-    marginHorizontal: 15,
-    marginBottom: 12,
-    borderRadius: 12,
-    padding: 15,
-    elevation: 2,
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 15,
-  },
-  categoryBadgeText: {
-    fontSize: 10,
-    color: "#007bff",
-    fontWeight: "bold",
-    textTransform: "uppercase",
-  },
-  productName: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
-    marginTop: 2,
-  },
-  transactionNumber: { fontSize: 15, fontWeight: "bold", color: "#333" },
-  transactionType: { fontSize: 11, color: "#666", marginTop: 2 },
-  customerName: { fontSize: 13, color: "#555", marginTop: 2 },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
-  statusText: { fontSize: 10, fontWeight: "bold" },
-
-  dataGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-    paddingBottom: 5,
-  },
-  dataPoint: { width: 100, marginBottom: 5 },
-  dataLabel: { fontSize: 10, color: "#888" },
-  dataValue: { fontSize: 12, color: "#333", marginTop: 2 },
-
-  transactionGrid: { gap: 8 },
-  transactionRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 4,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "#eee",
-  },
-  transactionLabel: { fontSize: 12, color: "#666", flex: 1 },
-  transactionValue: {
-    fontSize: 12,
-    color: "#333",
-    flex: 2,
-    textAlign: "right",
-  },
-
-  emptyContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 40,
-  },
-  emptyText: { fontSize: 16, color: "#666", marginTop: 10 },
-  emptySubText: { fontSize: 12, color: "#999", marginTop: 5 },
+  dateText: { marginLeft: 10, color: '#333' },
+  generateBtn: { backgroundColor: '#0056b3', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 12, borderRadius: 8, marginTop: 15 },
+  generateBtnText: { color: 'white', fontWeight: 'bold', marginLeft: 8 },
+  exportRow: { paddingHorizontal: 15, marginBottom: 15, flexDirection: 'row' },
+  exportBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 6, marginRight: 8 },
+  exportBtnText: { color: 'white', marginLeft: 6, fontSize: 12, fontWeight: 'bold' },
+  orgInfo: { alignItems: 'center', marginBottom: 15 },
+  orgName: { fontSize: 18, fontWeight: 'bold', color: '#0056b3' },
+  orgAddress: { fontSize: 12, color: '#666' },
+  reportPeriod: { fontSize: 11, color: '#666', marginTop: 2, fontStyle: 'italic' },
+  reportTitleBadge: { backgroundColor: '#eef2f7', paddingHorizontal: 15, paddingVertical: 5, borderRadius: 20, marginTop: 8 },
+  reportTitleText: { fontSize: 11, fontWeight: 'bold', color: '#333' },
+  tabRow: { flexDirection: 'row', backgroundColor: 'white', padding: 5, marginHorizontal: 15, borderRadius: 10, marginBottom: 15 },
+  tabItem: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
+  tabItemActive: { backgroundColor: '#007bff' },
+  tabText: { fontSize: 12, color: '#666' },
+  tabTextActive: { color: 'white', fontWeight: 'bold' },
+  searchBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', marginHorizontal: 15, paddingHorizontal: 12, borderRadius: 10, height: 45, marginBottom: 15, borderWidth: 1, borderColor: '#eee' },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 14, padding: 0 },
+  tableScrollView: { marginHorizontal: 15, marginBottom: 10 },
+  tableHeader: { flexDirection: 'row', backgroundColor: '#0056b3', paddingVertical: 12, paddingHorizontal: 0, borderRadius: 8, marginBottom: 2 },
+  headerCell: { paddingHorizontal: 8, justifyContent: 'center', alignItems: 'center' },
+  headerText: { color: 'white', fontSize: 11, fontWeight: 'bold', textAlign: 'center' },
+  tableRow: { flexDirection: 'row', paddingVertical: 10, paddingHorizontal: 0, borderRadius: 8, marginBottom: 2 },
+  rowEven: { backgroundColor: 'white' },
+  rowOdd: { backgroundColor: '#f8f9fa' },
+  cell: { paddingHorizontal: 8, justifyContent: 'center' },
+  border: { borderWidth: 1, borderColor: '#ddd' },
+  borderRight: { borderRightWidth: 1, borderRightColor: '#ddd' },
+  statusBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10, alignSelf: 'center' },
+  statusText: { fontSize: 9, fontWeight: 'bold' },
+  loadingContainer: { padding: 40, alignItems: 'center' },
+  loadingText: { marginTop: 10, color: '#666' },
+  errorContainer: { backgroundColor: '#ffebee', padding: 10, margin: 15, borderRadius: 8 },
+  errorText: { color: '#c62828', fontSize: 12 },
+  downloadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
+  downloadText: { color: 'white', marginTop: 10, fontSize: 16 },
 });
