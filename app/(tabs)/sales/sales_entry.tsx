@@ -1,6 +1,8 @@
 import { ThemedText } from "@/components/themed-text";
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -12,18 +14,37 @@ import {
   TouchableOpacity,
   View,
   Modal,
+  FlatList,
 } from "react-native";
 
 // API Configuration
-const API_KEY = "3A734AC6-A521-4192-984D-08D082B83456";
 const BASE_URL = "http://devmystock.byteheart.com";
 
+interface Organization {
+  OrganizationId: number;
+  ApiKey: string;
+  OrganizationName?: string;
+}
+
+interface UserSession {
+  Success: boolean;
+  Message: string;
+  Token: string | null;
+  UserId: string;
+  UserName: string;
+  RoleName: string;
+  OrganizationId: number;
+  OrganizationName: string;
+  ApiKey: string;
+  Organizations: Organization[];
+}
+
 // Helper function for API calls with authentication
-const apiRequest = async (endpoint: string, options: RequestInit = {}) => {
+const apiRequest = async (endpoint: string, apiKey: string, options: RequestInit = {}) => {
   const response = await fetch(`${BASE_URL}${endpoint}`, {
     ...options,
     headers: {
-      Authorization: `Bearer ${API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       ...options.headers,
     },
@@ -42,10 +63,11 @@ const calculateFIFOProfit = async (
   organizationId: number | null,
   productId: number,
   quantity: number,
-  salesPrice: number
+  salesPrice: number,
+  apiKey: string
 ) => {
   try {
-    const data = await apiRequest("/Stock/CalculateFIFOProfit", {
+    const data = await apiRequest("/Stock/CalculateFIFOProfit", apiKey, {
       method: "POST",
       body: JSON.stringify({
         organizationId: organizationId,
@@ -87,15 +109,208 @@ interface RowData {
   loadingProfit: boolean;
 }
 
+// Searchable Category Modal
+const SearchableCategoryModal = ({ 
+  visible, 
+  onClose, 
+  onSelect, 
+  categories, 
+  title 
+}: any) => {
+  const [searchText, setSearchText] = useState("");
+
+  const filteredCategories = searchText 
+    ? categories.filter((cat: string) => 
+        cat.toLowerCase().includes(searchText.toLowerCase())
+      )
+    : categories;
+
+  const handleSelect = (category: string) => {
+    onSelect(category);
+    onClose();
+    setSearchText("");
+  };
+
+  return (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={visible}
+      onRequestClose={() => {
+        onClose();
+        setSearchText("");
+      }}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.searchModalContainer}>
+          <View style={styles.searchModalHeader}>
+            <ThemedText style={styles.searchModalTitle}>{title}</ThemedText>
+            <TouchableOpacity onPress={() => {
+              onClose();
+              setSearchText("");
+            }}>
+              <Ionicons name="close" size={24} color="#333" />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.searchInputContainer}>
+            <Ionicons name="search" size={20} color="#999" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search categories..."
+              placeholderTextColor="#999"
+              value={searchText}
+              onChangeText={setSearchText}
+              autoFocus
+            />
+          </View>
+          
+          <FlatList
+            data={filteredCategories}
+            keyExtractor={(item, index) => index.toString()}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.searchModalItem}
+                onPress={() => handleSelect(item)}
+                activeOpacity={0.7}
+              >
+                <ThemedText style={styles.searchModalItemText}>{item}</ThemedText>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <ThemedText style={styles.emptyText}>No categories found</ThemedText>
+              </View>
+            }
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+// Searchable Product Modal
+const SearchableProductModal = ({ 
+  visible, 
+  onClose, 
+  onSelect, 
+  products, 
+  title,
+  selectedCategory 
+}: any) => {
+  const [searchText, setSearchText] = useState("");
+  
+  // Filter products by category if category is selected
+  const filteredByCategory = selectedCategory 
+    ? products.filter((p: any) => p.Category === selectedCategory)
+    : products;
+  
+  const filteredProducts = searchText 
+    ? filteredByCategory.filter((product: any) => 
+        product.ProductName.toLowerCase().includes(searchText.toLowerCase())
+      )
+    : filteredByCategory;
+
+  const handleSelect = (product: any) => {
+    onSelect(product);
+    onClose();
+    setSearchText("");
+  };
+
+  return (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={visible}
+      onRequestClose={() => {
+        onClose();
+        setSearchText("");
+      }}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.searchModalContainer}>
+          <View style={styles.searchModalHeader}>
+            <ThemedText style={styles.searchModalTitle}>{title}</ThemedText>
+            <TouchableOpacity onPress={() => {
+              onClose();
+              setSearchText("");
+            }}>
+              <Ionicons name="close" size={24} color="#333" />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.searchInputContainer}>
+            <Ionicons name="search" size={20} color="#999" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search products..."
+              placeholderTextColor="#999"
+              value={searchText}
+              onChangeText={setSearchText}
+              autoFocus
+            />
+          </View>
+          
+          {selectedCategory && (
+            <View style={styles.filterBadge}>
+              <Ionicons name="filter" size={14} color="#007bff" />
+              <ThemedText style={styles.filterBadgeText}>Category: {selectedCategory}</ThemedText>
+            </View>
+          )}
+          
+          <FlatList
+            data={filteredProducts}
+            keyExtractor={(item) => item.ProductId.toString()}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.searchModalItem}
+                onPress={() => handleSelect(item)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.productItemContainer}>
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={styles.searchModalItemText}>{item.ProductName}</ThemedText>
+                    <ThemedText style={styles.productCategoryText}>Category: {item.Category || "N/A"}</ThemedText>
+                  </View>
+                  <ThemedText style={styles.productStockText}>Stock: {item.CurrentStock || 0}</ThemedText>
+                </View>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <ThemedText style={styles.emptyText}>
+                  {selectedCategory ? `No products found in ${selectedCategory} category` : "No products found"}
+                </ThemedText>
+              </View>
+            }
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 export default function SalesEntryScreen() {
+  const router = useRouter();
+  
   // State declarations
   const [rows, setRows] = useState<RowData[]>([]);
   const [nextRowId, setNextRowId] = useState(1);
   const [categories, setCategories] = useState<string[]>([]);
   const [products, setProducts] = useState<any[]>([]);
-  const [filteredProducts, setFilteredProducts] = useState<{ [key: number]: any[] }>({});
   const [loading, setLoading] = useState(false);
   const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [apiKey, setApiKey] = useState<string>("");
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizationName, setOrganizationName] = useState<string>("");
+  
+  // Modal states
+  const [categoryModalVisible, setCategoryModalVisible] = useState(false);
+  const [productModalVisible, setProductModalVisible] = useState(false);
+  const [currentRowId, setCurrentRowId] = useState<number | null>(null);
+  const [tempCategory, setTempCategory] = useState<string>("");
   
   // Customer Info State
   const [customerName, setCustomerName] = useState("");
@@ -122,16 +337,99 @@ export default function SalesEntryScreen() {
   const [modalMessage, setModalMessage] = useState("");
   const [modalTitle, setModalTitle] = useState("");
   const [modalType, setModalType] = useState<"success" | "error" | "warning" | "info">("info");
-  
-  // Organization Info
-  const [organizationName, setOrganizationName] = useState("BH Pharma Distribution");
 
-  // Load data on mount
+  // Load user session on mount
   useEffect(() => {
-    fetchCategories();
-    fetchProducts();
-    initializeRows();
+    loadUserSession();
   }, []);
+
+  // Fetch data when organization changes
+  useEffect(() => {
+    if (organizationId && apiKey) {
+      fetchCategories();
+      fetchProducts();
+      initializeRows();
+    }
+  }, [organizationId, apiKey]);
+
+  const loadUserSession = async () => {
+    try {
+      const session = await AsyncStorage.getItem("user_session");
+      if (!session) {
+        Alert.alert("Error", "Session not found. Please login again.");
+        setLoading(false);
+        return;
+      }
+
+      const userData: UserSession = JSON.parse(session);
+      
+      if (userData.Organizations && userData.Organizations.length > 0) {
+        try {
+          const headers = {
+            Authorization: `Bearer ${userData.ApiKey}`,
+            "Content-Type": "application/json",
+          };
+          const orgUrl = `http://devmystock.byteheart.com/Dashboard/GetAllOrganization?userId=${userData.UserId}`;
+          const orgResponse = await fetch(orgUrl, { headers });
+          const orgData = await orgResponse.json();
+          
+          const orgNameMap = new Map();
+          if (orgData && orgData.success && Array.isArray(orgData.data)) {
+            orgData.data.forEach((org: any) => {
+              const id = org.organizationId || org.id;
+              const name = org.organizationName || org.name;
+              if (id && name) {
+                orgNameMap.set(id, name);
+              }
+            });
+          }
+          
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: orgNameMap.get(org.OrganizationId) || `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName || userData.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          } else {
+            const firstOrg = orgsWithNames[0];
+            setOrganizationId(firstOrg.OrganizationId);
+            setOrganizationName(firstOrg.OrganizationName || `Organization ${firstOrg.OrganizationId}`);
+            setApiKey(firstOrg.ApiKey);
+          }
+        } catch (error) {
+          console.error("Error fetching organization names:", error);
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          }
+        }
+      } else {
+        Alert.alert("Error", "No organizations found for this user");
+      }
+    } catch (error) {
+      console.error("Error loading session:", error);
+      Alert.alert("Error", "Failed to load user session");
+    }
+  };
 
   const initializeRows = () => {
     const initialRows: RowData[] = [];
@@ -166,12 +464,11 @@ export default function SalesEntryScreen() {
       }
 
       console.log("Fetching categories from:", url);
-      const data = await apiRequest(url);
+      const data = await apiRequest(url, apiKey);
       console.log("Categories API Response:", data);
 
       let categoriesList: string[] = [];
 
-      // Handle different response formats
       if (Array.isArray(data)) {
         if (data.length > 0 && typeof data[0] === 'string') {
           categoriesList = data;
@@ -212,7 +509,7 @@ export default function SalesEntryScreen() {
       }
 
       console.log("Fetching products from:", url);
-      const data = await apiRequest(url);
+      const data = await apiRequest(url, apiKey);
       console.log("Products loaded:", data?.length || 0);
 
       let productsList = [];
@@ -235,11 +532,82 @@ export default function SalesEntryScreen() {
     }
   };
 
+  const handleOrgChange = (orgId: number) => {
+    if (orgId === 0) return;
+    
+    const selectedOrg = organizations.find(org => org.OrganizationId === orgId);
+    if (selectedOrg) {
+      setOrganizationId(selectedOrg.OrganizationId);
+      setOrganizationName(selectedOrg.OrganizationName || `Organization ${selectedOrg.OrganizationId}`);
+      setApiKey(selectedOrg.ApiKey);
+      setCategories([]);
+      setProducts([]);
+      initializeRows();
+      setCustomerName("");
+      setPhoneNumber("");
+      setEmail("");
+      setAddress("");
+      setPaymentAmount("0");
+      setPaymentMethod("Cash");
+      setPaymentReference("");
+    }
+  };
+
+  const onCategorySelect = (rowId: number, category: string) => {
+    setRows(prevRows =>
+      prevRows.map(row => {
+        if (row.id === rowId) {
+          return {
+            ...row,
+            category: category,
+            productId: 0,
+            productName: "",
+            stock: 0,
+            buyPrice: 0,
+            salePrice: 0,
+            qty: "",
+            amount: 0,
+            profit: 0,
+            profitPercentage: 0,
+            unitPrice: 0,
+            isPopulated: false,
+          };
+        }
+        return row;
+      })
+    );
+  };
+
+  const onProductSelect = (rowId: number, product: any) => {
+    setRows(prevRows =>
+      prevRows.map(row => {
+        if (row.id === rowId) {
+          return {
+            ...row,
+            productId: product.ProductId,
+            productName: product.ProductName,
+            category: product.Category, // Auto set category from product
+            stock: product.CurrentStock || 0,
+            buyPrice: product.UnitPrice || 0,
+            salePrice: product.SalesValue || product.UnitPrice || 0,
+            unitPrice: product.UnitPrice || 0,
+            isPopulated: true,
+            qty: "",
+            amount: 0,
+            profit: 0,
+            profitPercentage: 0,
+          };
+        }
+        return row;
+      })
+    );
+  };
+
   const loadCustomerByPhoneNumber = async (phone: string) => {
     if (!phone || phone.length < 6) return;
     
     try {
-      const response = await apiRequest(`/Stock/GetByPhoneNumber?phoneNumber=${phone}&orgId=${organizationId}`);
+      const response = await apiRequest(`/Stock/GetByPhoneNumber?phoneNumber=${phone}&orgId=${organizationId}`, apiKey);
       
       if (response.success && response.isData && response.customer) {
         setCustomerName(response.customer.CustomerName || "");
@@ -265,7 +633,8 @@ export default function SalesEntryScreen() {
       organizationId,
       row.productId,
       quantity,
-      salesPrice
+      salesPrice,
+      apiKey
     );
 
     const totalAmount = salesPrice * quantity;
@@ -289,63 +658,6 @@ export default function SalesEntryScreen() {
       )
     );
     updateSummary();
-  };
-
-  const onCategoryChange = (rowId: number, category: string) => {
-    // Filter products for this specific row
-    const filtered = products.filter(p => p.Category === category);
-    setFilteredProducts(prev => ({ ...prev, [rowId]: filtered }));
-    
-    setRows(prevRows =>
-      prevRows.map(row => {
-        if (row.id === rowId) {
-          return {
-            ...row,
-            category: category,
-            productId: 0,
-            productName: "",
-            stock: 0,
-            buyPrice: 0,
-            salePrice: 0,
-            qty: "",
-            amount: 0,
-            profit: 0,
-            profitPercentage: 0,
-            unitPrice: 0,
-            isPopulated: false,
-          };
-        }
-        return row;
-      })
-    );
-  };
-
-  const onProductChange = (rowId: number, productId: number) => {
-    const selectedProduct = products.find(p => p.ProductId === productId);
-    
-    if (selectedProduct) {
-      setRows(prevRows =>
-        prevRows.map(row => {
-          if (row.id === rowId) {
-            return {
-              ...row,
-              productId: selectedProduct.ProductId,
-              productName: selectedProduct.ProductName,
-              stock: selectedProduct.CurrentStock || 0,
-              buyPrice: selectedProduct.UnitPrice || 0,
-              salePrice: selectedProduct.SalesValue || selectedProduct.UnitPrice || 0,
-              unitPrice: selectedProduct.UnitPrice || 0,
-              isPopulated: true,
-              qty: "",
-              amount: 0,
-              profit: 0,
-              profitPercentage: 0,
-            };
-          }
-          return row;
-        })
-      );
-    }
   };
 
   const onQuantityChange = (rowId: number, qty: string) => {
@@ -499,7 +811,6 @@ export default function SalesEntryScreen() {
     const payment = parseFloat(paymentAmount) || 0;
     const due = totalSaleAmount - payment;
 
-    // Validate customer data for due payments
     if (due > 0) {
       if (!phoneNumber) {
         Alert.alert("Validation Error", "Phone number is required for due payment transactions");
@@ -511,13 +822,11 @@ export default function SalesEntryScreen() {
       }
     }
 
-    // Validate payment method if payment exists
     if (payment > 0 && !paymentMethod) {
       Alert.alert("Validation Error", "Please select a payment method");
       return;
     }
 
-    // Build sale items
     for (const row of rows) {
       if (row.isPopulated) {
         const qty = parseFloat(row.qty) || 0;
@@ -550,7 +859,6 @@ export default function SalesEntryScreen() {
       return;
     }
 
-    // Prepare sale data
     const saleData: any = {
       transactionDate: new Date().toISOString(),
       dailyExpense: parseFloat(dailyExpense) || 0,
@@ -570,7 +878,7 @@ export default function SalesEntryScreen() {
     setLoading(true);
 
     try {
-      const response = await apiRequest("/Stock/SaveAPI", {
+      const response = await apiRequest("/Stock/SaveAPI", apiKey, {
         method: "POST",
         body: JSON.stringify(saleData),
       });
@@ -594,20 +902,20 @@ export default function SalesEntryScreen() {
     }
   };
 
-  const showModal = (title: string, message: string, type: "success" | "error" | "warning" | "info") => {
-    setModalTitle(title);
-    setModalMessage(message);
-    setModalType(type);
-    setModalVisible(true);
+  const handleBackPress = () => {
+    router.push("/sales_list");
   };
 
-  const getModalColors = () => {
-    switch (modalType) {
-      case "success": return { header: "#28a745", body: "#d4edda", text: "#155724" };
-      case "error": return { header: "#dc3545", body: "#f8d7da", text: "#721c24" };
-      case "warning": return { header: "#ffc107", body: "#fff3cd", text: "#856404" };
-      default: return { header: "#17a2b8", body: "#d1ecf1", text: "#0c5460" };
-    }
+  const openCategoryModal = (rowId: number) => {
+    setCurrentRowId(rowId);
+    setCategoryModalVisible(true);
+  };
+
+  const openProductModal = (rowId: number) => {
+    const row = rows.find(r => r.id === rowId);
+    setTempCategory(row?.category || "");
+    setCurrentRowId(rowId);
+    setProductModalVisible(true);
   };
 
   if (loading && categories.length === 0 && products.length === 0) {
@@ -623,7 +931,40 @@ export default function SalesEntryScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Modal */}
+      {/* Category Modal */}
+      <SearchableCategoryModal
+        visible={categoryModalVisible}
+        onClose={() => {
+          setCategoryModalVisible(false);
+          setCurrentRowId(null);
+        }}
+        onSelect={(category: string) => {
+          if (currentRowId) {
+            onCategorySelect(currentRowId, category);
+          }
+        }}
+        categories={categories}
+        title="Select Category"
+      />
+      
+      {/* Product Modal */}
+      <SearchableProductModal
+        visible={productModalVisible}
+        onClose={() => {
+          setProductModalVisible(false);
+          setCurrentRowId(null);
+          setTempCategory("");
+        }}
+        onSelect={(product: any) => {
+          if (currentRowId) {
+            onProductSelect(currentRowId, product);
+          }
+        }}
+        products={products}
+        title="Select Product"
+        selectedCategory={tempCategory}
+      />
+
       <Modal
         animationType="fade"
         transparent={true}
@@ -631,20 +972,18 @@ export default function SalesEntryScreen() {
         onRequestClose={() => setModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: getModalColors().body }]}>
-            <View style={[styles.modalHeader, { backgroundColor: getModalColors().header }]}>
+          <View style={[styles.modalContent, { backgroundColor: "#fff" }]}>
+            <View style={[styles.modalHeader, { backgroundColor: "#28a745" }]}>
               <ThemedText style={styles.modalHeaderText}>{modalTitle}</ThemedText>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#fff" />
               </TouchableOpacity>
             </View>
             <View style={styles.modalBody}>
-              <ThemedText style={[styles.modalMessage, { color: getModalColors().text }]}>
-                {modalMessage}
-              </ThemedText>
+              <ThemedText style={styles.modalMessage}>{modalMessage}</ThemedText>
             </View>
             <TouchableOpacity
-              style={[styles.modalButton, { backgroundColor: getModalColors().header }]}
+              style={[styles.modalButton, { backgroundColor: "#28a745" }]}
               onPress={() => setModalVisible(false)}
             >
               <ThemedText style={styles.modalButtonText}>OK</ThemedText>
@@ -655,8 +994,9 @@ export default function SalesEntryScreen() {
 
       {/* Header */}
       <View style={styles.topHeader}>
-        <TouchableOpacity style={styles.whiteBtn}>
-          <ThemedText style={styles.btnTextBlack}>← Back</ThemedText>
+        <TouchableOpacity style={styles.whiteBtn} onPress={handleBackPress}>
+          <Ionicons name="arrow-back" size={20} color="#333" />
+          <ThemedText style={styles.btnTextBlack}> Back</ThemedText>
         </TouchableOpacity>
         <TouchableOpacity style={styles.greenBtn} onPress={saveAll}>
           <ThemedText style={styles.btnTextWhite}>Save All</ThemedText>
@@ -665,6 +1005,38 @@ export default function SalesEntryScreen() {
 
       <ScrollView style={styles.scrollView}>
         <ThemedText style={styles.mainTitle}>Sales Entry</ThemedText>
+
+        {/* Organization Selector */}
+        {organizations.length > 0 && (
+          <View style={styles.card}>
+            <View style={styles.row}>
+              <Ionicons name="business" size={18} color="#28a745" />
+              <ThemedText style={[styles.sectionTitle, { marginBottom: 0, marginLeft: 8 }]}>Organization</ThemedText>
+            </View>
+            <View style={styles.pickerWrapper}>
+              <Picker
+                mode="dropdown"
+                style={styles.pickerStyle}
+                selectedValue={organizationId || 0}
+                onValueChange={handleOrgChange}
+              >
+                <Picker.Item label="-- Select Organization --" value={0} />
+                {organizations.map((org) => (
+                  <Picker.Item
+                    key={org.OrganizationId}
+                    label={org.OrganizationName || `Organization ${org.OrganizationId}`}
+                    value={org.OrganizationId}
+                  />
+                ))}
+              </Picker>
+            </View>
+            {organizationName ? (
+              <ThemedText style={styles.selectedOrgText}>
+                Selected: {organizationName}
+              </ThemedText>
+            ) : null}
+          </View>
+        )}
 
         {/* Date & Control Buttons */}
         <View style={styles.card}>
@@ -761,7 +1133,7 @@ export default function SalesEntryScreen() {
                 <Picker
                   mode="dropdown"
                   style={styles.pickerStyle}
-                  selectedValue={paymentMethod}
+                  selectedValue={paymentMethod || "Cash"}
                   onValueChange={(itemValue) => setPaymentMethod(itemValue)}
                 >
                   <Picker.Item label="Cash" value="Cash" />
@@ -800,7 +1172,7 @@ export default function SalesEntryScreen() {
             <View style={styles.tableHeader}>
               <ThemedText style={[styles.hCell, styles.borderRight, { width: 40 }]}>#</ThemedText>
               <ThemedText style={[styles.hCell, styles.borderRight, { width: 150 }]}>Category</ThemedText>
-              <ThemedText style={[styles.hCell, styles.borderRight, { width: 180 }]}>Product Name</ThemedText>
+              <ThemedText style={[styles.hCell, styles.borderRight, { width: 200 }]}>Product Name</ThemedText>
               <ThemedText style={[styles.hCell, styles.borderRight, { width: 70 }]}>Stock</ThemedText>
               <ThemedText style={[styles.hCell, styles.borderRight, { width: 80 }]}>Qty</ThemedText>
               <ThemedText style={[styles.hCell, styles.borderRight, { width: 100 }]}>Sale Price (৳)</ThemedText>
@@ -815,42 +1187,33 @@ export default function SalesEntryScreen() {
                   {index + 1}
                 </ThemedText>
                 
-                {/* Category Picker */}
-                <View style={[styles.borderRight, { width: 150, padding: 2 }]}>
-                  <View style={styles.tablePicker}>
-                    <Picker
-                      mode="dropdown"
-                      selectedValue={item.category}
-                      onValueChange={(value) => onCategoryChange(item.id, value)}
-                    >
-                      <Picker.Item label="Select Category..." value="" />
-                      {categories.map((cat, idx) => (
-                        <Picker.Item key={idx} label={cat} value={cat} />
-                      ))}
-                    </Picker>
+                {/* Category Button with Search */}
+                <TouchableOpacity
+                  style={[styles.borderRight, { width: 150, padding: 5 }]}
+                  onPress={() => openCategoryModal(item.id)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.searchableField}>
+                    <ThemedText style={item.category ? styles.selectedText : styles.placeholderText}>
+                      {item.category || "Select Category"}
+                    </ThemedText>
+                    <Ionicons name="search" size={18} color="#666" />
                   </View>
-                </View>
+                </TouchableOpacity>
                 
-                {/* Product Picker */}
-                <View style={[styles.borderRight, { width: 180, padding: 2 }]}>
-                  <View style={styles.tablePicker}>
-                    <Picker
-                      mode="dropdown"
-                      selectedValue={item.productId}
-                      onValueChange={(value) => onProductChange(item.id, value)}
-                      enabled={!!item.category}
-                    >
-                      <Picker.Item label="Select Product..." value={0} />
-                      {(filteredProducts[item.id] || products.filter(p => p.Category === item.category)).map((prod: any) => (
-                        <Picker.Item 
-                          key={prod.ProductId} 
-                          label={`${prod.ProductName}`} 
-                          value={prod.ProductId} 
-                        />
-                      ))}
-                    </Picker>
+                {/* Product Button with Search */}
+                <TouchableOpacity
+                  style={[styles.borderRight, { width: 200, padding: 5 }]}
+                  onPress={() => openProductModal(item.id)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.searchableField}>
+                    <ThemedText style={item.productName ? styles.selectedText : styles.placeholderText}>
+                      {item.productName || "Select Product"}
+                    </ThemedText>
+                    <Ionicons name="search" size={18} color="#666" />
                   </View>
-                </View>
+                </TouchableOpacity>
                 
                 {/* Stock Display */}
                 <ThemedText
@@ -891,7 +1254,7 @@ export default function SalesEntryScreen() {
                   {item.amount.toFixed(2)}
                 </ThemedText>
                 
-                {/* Profit Display with Loading */}
+                {/* Profit Display */}
                 <View style={[styles.borderRight, { width: 90, padding: 5 }]}>
                   {item.loadingProfit ? (
                     <ActivityIndicator size="small" color="#28a745" />
@@ -940,10 +1303,6 @@ export default function SalesEntryScreen() {
             <ThemedText style={[styles.sumLabel, { color: "red" }]}>Due Amount:</ThemedText>
             <ThemedText style={{ color: "red", fontWeight: "bold" }}>৳{dueAmount.toFixed(2)}</ThemedText>
           </View>
-          <View style={styles.sumRow}>
-            <ThemedText style={styles.netProfitText}>NET PROFIT:</ThemedText>
-            <ThemedText style={styles.netProfitText}>৳{(totalProfit - (parseFloat(dailyExpense) || 0)).toFixed(2)}</ThemedText>
-          </View>
         </View>
 
         {/* Bottom Actions */}
@@ -975,7 +1334,7 @@ export default function SalesEntryScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f4f7f6" },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
-  topHeader: { flexDirection: "row", justifyContent: "flex-end", padding: 10, gap: 10, backgroundColor: "#fff" },
+  topHeader: { flexDirection: "row", justifyContent: "space-between", padding: 10, gap: 10, backgroundColor: "#fff" },
   scrollView: { padding: 10 },
   mainTitle: { fontSize: 20, color: "#333", marginBottom: 15, fontWeight: "500" },
   card: { backgroundColor: "#fff", padding: 12, borderRadius: 6, marginBottom: 15, borderWidth: 1, borderColor: "#ddd" },
@@ -990,27 +1349,25 @@ const styles = StyleSheet.create({
   pickerWrapper: { borderWidth: 1, borderColor: "#ccc", borderRadius: 4, height: 45, backgroundColor: "#fff", justifyContent: "center" },
   pickerStyle: { height: 55, width: "100%" },
   paymentText: { fontSize: 14, fontWeight: "bold" },
-  tableContainer: { borderWidth: 1, borderColor: "#aaa", borderRadius: 4, overflow: "hidden" },
+  tableContainer: { borderWidth: 1, borderColor: "#aaa", borderRadius: 4, overflow: "hidden", minWidth: "100%" },
   tableHeader: { flexDirection: "row", backgroundColor: "#d1e7dd" },
   tableRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#fff", borderTopWidth: 1, borderTopColor: "#aaa" },
   hCell: { paddingVertical: 10, textAlign: "center", fontWeight: "bold", fontSize: 12, color: "#333" },
   cell: { paddingVertical: 10, textAlign: "center", fontSize: 13, color: "#333" },
   borderRight: { borderRightWidth: 1, borderRightColor: "#aaa" },
   tableInput: { borderWidth: 1, borderColor: "#bbb", height: 35, textAlign: "center", borderRadius: 3, backgroundColor: "#fff", color: "#000", fontSize: 14, padding: 0 },
-  tablePicker: { borderWidth: 1, borderColor: "#bbb", borderRadius: 3, height: 35, justifyContent: "center", backgroundColor: "#fff" },
   summaryCard: { backgroundColor: "#d4edda", padding: 15, borderRadius: 6, marginTop: 15, borderWidth: 1, borderColor: "#c3e6cb" },
   summaryTitle: { fontSize: 14, color: "#155724", marginBottom: 12, fontWeight: "bold", borderBottomWidth: 1, borderBottomColor: "#c3e6cb", paddingBottom: 5 },
   sumRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 5, borderBottomWidth: 0.5, borderBottomColor: "#badbcc" },
   sumLabel: { fontSize: 14, color: "#444" },
   sumVal: { fontSize: 14, fontWeight: "600" },
-  netProfitText: { fontWeight: "bold", fontSize: 16, color: "#155724", marginTop: 8 },
   bottomBar: { flexDirection: "row", justifyContent: "space-between", gap: 8, paddingVertical: 25, paddingBottom: 40 },
   actionBtn: { flex: 1, height: 45, borderRadius: 4, justifyContent: "center", alignItems: "center", padding: 10 },
-  greenBtn: { backgroundColor: "#5cb85c", height: 35, paddingHorizontal: 15, borderRadius: 4, justifyContent: "center" },
-  whiteBtn: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#ccc", height: 35, paddingHorizontal: 15, borderRadius: 4, justifyContent: "center" },
+  greenBtn: { backgroundColor: "#5cb85c", height: 35, paddingHorizontal: 15, borderRadius: 4, flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  whiteBtn: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#ccc", height: 35, paddingHorizontal: 15, borderRadius: 4, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
   btnTextWhite: { color: "#fff", fontWeight: "bold", fontSize: 14 },
   btnTextBlack: { color: "#333", fontSize: 14 },
-  refreshBtn: { backgroundColor: "#17a2b8", height: 45, width: 45, borderRadius: 4, justifyContent: "center", alignItems: "center" },
+  refreshBtn: { backgroundColor: "#17a2b8", height: 45, width: 45, borderRadius: 4, justifyContent: "center", alignItems: "center", marginLeft: 10 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
   modalContent: { width: "85%", borderRadius: 8, overflow: "hidden", backgroundColor: "#fff" },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 15 },
@@ -1019,4 +1376,112 @@ const styles = StyleSheet.create({
   modalMessage: { fontSize: 16, textAlign: "center" },
   modalButton: { margin: 15, padding: 10, borderRadius: 4, alignItems: "center" },
   modalButtonText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
+  selectedOrgText: { fontSize: 12, color: "#28a745", marginTop: 8, textAlign: "center", fontWeight: "bold" },
+  
+  // Searchable Field Styles
+  searchableField: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#bbb",
+    borderRadius: 3,
+    paddingHorizontal: 8,
+    height: 35,
+    backgroundColor: "#fff",
+  },
+  selectedText: {
+    fontSize: 13,
+    color: "#333",
+    fontWeight: "500",
+  },
+  placeholderText: {
+    fontSize: 13,
+    color: "#999",
+  },
+  
+  // Search Modal Styles
+  searchModalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    width: "90%",
+    maxHeight: "80%",
+    overflow: "hidden",
+  },
+  searchModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+    backgroundColor: "#f8f9fa",
+  },
+  searchModalTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#333",
+  },
+  searchInputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+    backgroundColor: "#fff",
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 16,
+    color: "#333",
+  },
+  searchModalItem: {
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+  },
+  searchModalItemText: {
+    fontSize: 14,
+    color: "#333",
+    fontWeight: "500",
+  },
+  productCategoryText: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 2,
+  },
+  productItemContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  productStockText: {
+    fontSize: 12,
+    color: "#28a745",
+    fontWeight: "bold",
+  },
+  emptyContainer: {
+    padding: 40,
+    alignItems: "center",
+  },
+  emptyText: {
+    fontSize: 14,
+    color: "#999",
+  },
+  filterBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    backgroundColor: "#e7f1ff",
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 6,
+  },
+  filterBadgeText: {
+    fontSize: 12,
+    color: "#007bff",
+  },
 });

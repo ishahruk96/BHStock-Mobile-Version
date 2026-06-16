@@ -2,6 +2,7 @@ import { ThemedText } from "@/components/themed-text";
 import { FontAwesome5, Ionicons, MaterialIcons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import Checkbox from "expo-checkbox";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -16,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Picker } from "@react-native-picker/picker";
 
 // API Interface Mappings
 interface DueCustomer {
@@ -78,9 +80,32 @@ interface CustomerDetails {
   transactions: Transaction[];
 }
 
+interface Organization {
+  OrganizationId: number;
+  ApiKey: string;
+  OrganizationName?: string;
+}
+
+interface UserSession {
+  Success: boolean;
+  Message: string;
+  Token: string | null;
+  UserId: string;
+  UserName: string;
+  RoleName: string;
+  OrganizationId: number;
+  OrganizationName: string;
+  ApiKey: string;
+  Organizations: Organization[];
+}
+
 export default function CustomerDueListMobile() {
-  const apiKey = "3A734AC6-A521-4192-984D-08D082B83456";
-  const orgId = 3;
+  // Organization States
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [organizationName, setOrganizationName] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [orgLoading, setOrgLoading] = useState<boolean>(true);
 
   // Data Loading States
   const [loading, setLoading] = useState<boolean>(true);
@@ -135,43 +160,206 @@ export default function CustomerDueListMobile() {
     return `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   };
 
-  // Initial Fetch Data
-  const fetchDueData = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(
-        "http://devmystock.byteheart.com/Due/Index",
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-        },
-      );
+  // Load User Session
+  useEffect(() => {
+    loadUserSession();
+  }, []);
 
-      const result = await response.json();
-      if (result.success) {
-        setAllCustomers(result.data || []);
-        setFilteredCustomers(result.data || []);
-        if (result.summary) {
-          setSummary(result.summary);
+  // Fetch data when organization changes
+  useEffect(() => {
+    if (organizationId && apiKey) {
+      fetchDueData();
+    }
+  }, [organizationId, apiKey]);
+
+  const loadUserSession = async () => {
+    try {
+      const session = await AsyncStorage.getItem("user_session");
+      if (!session) {
+        Alert.alert("Error", "Session not found. Please login again.");
+        setOrgLoading(false);
+        return;
+      }
+
+      const userData: UserSession = JSON.parse(session);
+      
+      if (userData.Organizations && userData.Organizations.length > 0) {
+        try {
+          const headers = {
+            Authorization: `Bearer ${userData.ApiKey}`,
+            "Content-Type": "application/json",
+          };
+          const orgUrl = `http://devmystock.byteheart.com/Dashboard/GetAllOrganization?userId=${userData.UserId}`;
+          const orgResponse = await fetch(orgUrl, { headers });
+          const orgData = await orgResponse.json();
+          
+          const orgNameMap = new Map();
+          if (orgData && orgData.success && Array.isArray(orgData.data)) {
+            orgData.data.forEach((org: any) => {
+              const id = org.organizationId || org.id;
+              const name = org.organizationName || org.name;
+              if (id && name) {
+                orgNameMap.set(id, name);
+              }
+            });
+          }
+          
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: orgNameMap.get(org.OrganizationId) || `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName || userData.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          } else {
+            const firstOrg = orgsWithNames[0];
+            setOrganizationId(firstOrg.OrganizationId);
+            setOrganizationName(firstOrg.OrganizationName || `Organization ${firstOrg.OrganizationId}`);
+            setApiKey(firstOrg.ApiKey);
+          }
+        } catch (error) {
+          console.error("Error fetching organization names:", error);
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          }
         }
       } else {
-        Alert.alert("Error", result.message || "Failed to fetch data");
+        Alert.alert("Error", "No organizations found for this user");
       }
     } catch (error) {
-      console.error("Error fetching due list:", error);
-      Alert.alert("Error", "Network error occurred");
+      console.error("Error loading session:", error);
+      Alert.alert("Error", "Failed to load user session");
     } finally {
-      setLoading(false);
+      setOrgLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchDueData();
-  }, []);
+  const handleOrgChange = (orgId: number) => {
+    if (orgId === 0) return;
+    
+    const selectedOrg = organizations.find(org => org.OrganizationId === orgId);
+    if (selectedOrg) {
+      setOrganizationId(selectedOrg.OrganizationId);
+      setOrganizationName(selectedOrg.OrganizationName || `Organization ${selectedOrg.OrganizationId}`);
+      setApiKey(selectedOrg.ApiKey);
+      // Reset data when organization changes
+      setAllCustomers([]);
+      setFilteredCustomers([]);
+      setSummary({
+        TotalSales: 0,
+        TotalReceived: 0,
+        TotalDue: 0,
+        CustomersWithDue: 0,
+      });
+      setSearchQuery("");
+      setSelectedStatus("All");
+    }
+  };
+
+  // Update the fetchDueData function
+const fetchDueData = async () => {
+  setLoading(true);
+  try {
+    const response = await fetch(
+      `http://devmystock.byteheart.com/Due/Index?organizationId=${organizationId}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+      },
+    );
+
+    const result = await response.json();
+    console.log("=== Due API Response ===");
+    console.log("Full Response:", JSON.stringify(result, null, 2));
+    
+    if (result.success) {
+      setAllCustomers(result.data || []);
+      setFilteredCustomers(result.data || []);
+      
+      // Handle summary with different possible property names
+      if (result.summary) {
+        const summaryData = result.summary;
+        setSummary({
+          TotalSales: summaryData.TotalSales || 
+                      summaryData.totalSales || 
+                      summaryData.total_sales || 
+                      summaryData.TotalSale || 
+                      0,
+          TotalReceived: summaryData.TotalReceived || 
+                         summaryData.totalReceived || 
+                         summaryData.total_received || 
+                         summaryData.TotalPaid || 
+                         summaryData.TotalReceive || 
+                         0,
+          TotalDue: summaryData.TotalDue || 
+                    summaryData.totalDue || 
+                    summaryData.total_due || 
+                    summaryData.DueAmount || 
+                    0,
+          CustomersWithDue: summaryData.CustomersWithDue || 
+                           summaryData.customersWithDue || 
+                           summaryData.customers_with_due || 
+                           summaryData.TotalCustomers || 
+                           summaryData.CustomerCount || 
+                           0,
+        });
+      } else {
+        // If summary is not provided, calculate from data
+        calculateSummaryFromData(result.data || []);
+      }
+    } else {
+      Alert.alert("Error", result.message || "Failed to fetch data");
+    }
+  } catch (error) {
+    console.error("Error fetching due list:", error);
+    Alert.alert("Error", "Network error occurred");
+  } finally {
+    setLoading(false);
+  }
+};
+
+// Add this helper function to calculate summary from data
+const calculateSummaryFromData = (data: DueCustomer[]) => {
+  let totalSales = 0;
+  let totalReceived = 0;
+  let totalDue = 0;
+  
+  data.forEach((customer) => {
+    totalSales += customer.TotalSale || 0;
+    totalReceived += customer.TotalPaid || 0;
+    totalDue += customer.DueAmount || 0;
+  });
+  
+  setSummary({
+    TotalSales: totalSales,
+    TotalReceived: totalReceived,
+    TotalDue: totalDue,
+    CustomersWithDue: data.filter(c => c.DueAmount > 0).length,
+  });
+};
 
   // Search Action Controller
   const handleSearchAction = () => {
@@ -232,7 +420,7 @@ export default function CustomerDueListMobile() {
     setLoadingDetails(true);
     try {
       const response = await fetch(
-        `http://devmystock.byteheart.com/Due/CustomerDue?customerId=${customerId}`,
+        `http://devmystock.byteheart.com/Due/CustomerDue?customerId=${customerId}&organizationId=${organizationId}`,
         {
           method: "GET",
           headers: {
@@ -320,7 +508,7 @@ export default function CustomerDueListMobile() {
       PaymentAmount: parseFloat(paymentAmount),
       PaymentDate: formattedDate,
       PaymentMethod: paymentMethod,
-      OrganizationId: orgId,
+      OrganizationId: organizationId,
       PaymentTransactionNumber: paymentTransactionNumber,
       SelectedTransactions: selectedTransactionsString,
     };
@@ -419,7 +607,7 @@ export default function CustomerDueListMobile() {
       PaymentAmount: parseFloat(paymentAmount),
       PaymentDate: formattedDate,
       PaymentMethod: paymentMethod,
-      OrganizationId: orgId,
+      OrganizationId: organizationId,
       PaymentTransactionNumber: paymentTransactionNumber,
       SelectedTransactions: selectedTransactionsString,
     };
@@ -620,10 +808,11 @@ export default function CustomerDueListMobile() {
     return total;
   };
 
-  if (loading) {
+  if (loading || orgLoading) {
     return (
       <View style={styles.centerLoading}>
         <ActivityIndicator size="large" color="#093" />
+        <ThemedText style={{ marginTop: 10 }}>Loading...</ThemedText>
       </View>
     );
   }
@@ -647,7 +836,38 @@ export default function CustomerDueListMobile() {
                 Due Portfolio
               </ThemedText>
             </View>
+            {organizationName ? (
+              <ThemedText style={styles.headerSubtitle}>
+                {organizationName}
+              </ThemedText>
+            ) : null}
           </View>
+
+          {/* Organization Selector */}
+          {organizations.length > 0 && (
+            <View style={styles.orgCard}>
+              <View style={styles.orgHeader}>
+                <Ionicons name="business" size={18} color="#093" />
+                <ThemedText style={styles.orgTitle}>Organization</ThemedText>
+              </View>
+              <View style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={organizationId || 0}
+                  onValueChange={handleOrgChange}
+                  style={styles.picker}
+                >
+                  {/* <Picker.Item label="-- Select Organization --" value={0} /> */}
+                  {organizations.map((org) => (
+                    <Picker.Item
+                      key={org.OrganizationId}
+                      label={org.OrganizationName || `Organization ${org.OrganizationId}`}
+                      value={org.OrganizationId}
+                    />
+                  ))}
+                </Picker>
+              </View>
+            </View>
+          )}
 
           {/* Search & Filter */}
           <View style={styles.filterCard}>
@@ -746,90 +966,99 @@ export default function CustomerDueListMobile() {
             Customer Due Details
           </ThemedText>
 
-          {filteredCustomers.map((item) => (
-            <View key={item.CustomerId} style={styles.customerCard}>
-              <View style={styles.cardHeader}>
-                <View style={styles.customerInfo}>
-                  <ThemedText style={styles.customerName}>
-                    {item.CustomerName}
-                  </ThemedText>
-                  <ThemedText style={styles.phoneTxt}>
-                    {item.CustomerPhone || "No Phone"}
-                  </ThemedText>
-                </View>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    {
-                      backgroundColor:
-                        item.PaymentStatus === "Unpaid" ? "#f8d7da" : "#fff3cd",
-                    },
-                  ]}
-                >
-                  <ThemedText
+          {filteredCustomers.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <MaterialIcons name="info" size={50} color="#ccc" />
+              <ThemedText style={styles.emptyText}>
+                No customers found
+              </ThemedText>
+            </View>
+          ) : (
+            filteredCustomers.map((item) => (
+              <View key={item.CustomerId} style={styles.customerCard}>
+                <View style={styles.cardHeader}>
+                  <View style={styles.customerInfo}>
+                    <ThemedText style={styles.customerName}>
+                      {item.CustomerName}
+                    </ThemedText>
+                    <ThemedText style={styles.phoneTxt}>
+                      {item.CustomerPhone || "No Phone"}
+                    </ThemedText>
+                  </View>
+                  <View
                     style={[
-                      styles.statusText,
+                      styles.statusBadge,
                       {
-                        color:
-                          item.PaymentStatus === "Unpaid"
-                            ? "#721c24"
-                            : "#856404",
+                        backgroundColor:
+                          item.PaymentStatus === "Unpaid" ? "#f8d7da" : "#fff3cd",
                       },
                     ]}
                   >
-                    {item.PaymentStatus}
-                  </ThemedText>
+                    <ThemedText
+                      style={[
+                        styles.statusText,
+                        {
+                          color:
+                            item.PaymentStatus === "Unpaid"
+                              ? "#721c24"
+                              : "#856404",
+                        },
+                      ]}
+                    >
+                      {item.PaymentStatus}
+                    </ThemedText>
+                  </View>
+                </View>
+
+                <View style={styles.divider} />
+
+                <View style={styles.infoGrid}>
+                  <View style={styles.infoBox}>
+                    <ThemedText style={styles.infoLabel}>Total Sale</ThemedText>
+                    <ThemedText style={styles.infoVal}>
+                      ৳{item.TotalSale}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.infoBox}>
+                    <ThemedText style={styles.infoLabel}>Total Paid</ThemedText>
+                    <ThemedText style={styles.infoVal}>
+                      ৳{item.TotalPaid}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.infoBox}>
+                    <ThemedText style={styles.infoLabel}>Due Amount</ThemedText>
+                    <ThemedText style={[styles.infoVal, { color: "#DC3545" }]}>
+                      ৳{item.DueAmount}
+                    </ThemedText>
+                  </View>
+                </View>
+
+                <ThemedText style={styles.lastDate}>
+                  Last Transaction: {formatDate(item.LastTransactionDate)}
+                </ThemedText>
+
+                <View style={styles.actionRow}>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, { backgroundColor: "#28A745" }]}
+                    onPress={() => openReceivePayment(item)}
+                  >
+                    <Ionicons name="download-outline" size={14} color="white" />
+                    <ThemedText style={styles.btnTxtWhite}> Receive</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.actionBtn,
+                      { backgroundColor: "#6F42C1", marginLeft: 10 },
+                    ]}
+                    onPress={() => openBulkPayment(item)}
+                  >
+                    <MaterialIcons name="payment" size={14} color="white" />
+                    <ThemedText style={styles.btnTxtWhite}> Pay Bulk</ThemedText>
+                  </TouchableOpacity>
                 </View>
               </View>
-
-              <View style={styles.divider} />
-
-              <View style={styles.infoGrid}>
-                <View style={styles.infoBox}>
-                  <ThemedText style={styles.infoLabel}>Total Sale</ThemedText>
-                  <ThemedText style={styles.infoVal}>
-                    ৳{item.TotalSale}
-                  </ThemedText>
-                </View>
-                <View style={styles.infoBox}>
-                  <ThemedText style={styles.infoLabel}>Total Paid</ThemedText>
-                  <ThemedText style={styles.infoVal}>
-                    ৳{item.TotalPaid}
-                  </ThemedText>
-                </View>
-                <View style={styles.infoBox}>
-                  <ThemedText style={styles.infoLabel}>Due Amount</ThemedText>
-                  <ThemedText style={[styles.infoVal, { color: "#DC3545" }]}>
-                    ৳{item.DueAmount}
-                  </ThemedText>
-                </View>
-              </View>
-
-              <ThemedText style={styles.lastDate}>
-                Last Transaction: {formatDate(item.LastTransactionDate)}
-              </ThemedText>
-
-              <View style={styles.actionRow}>
-                <TouchableOpacity
-                  style={[styles.actionBtn, { backgroundColor: "#28A745" }]}
-                  onPress={() => openReceivePayment(item)}
-                >
-                  <Ionicons name="download-outline" size={14} color="white" />
-                  <ThemedText style={styles.btnTxtWhite}> Receive</ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.actionBtn,
-                    { backgroundColor: "#6F42C1", marginLeft: 10 },
-                  ]}
-                  onPress={() => openBulkPayment(item)}
-                >
-                  <MaterialIcons name="payment" size={14} color="white" />
-                  <ThemedText style={styles.btnTxtWhite}> Pay Bulk</ThemedText>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
+            ))
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
 
@@ -1523,13 +1752,45 @@ const styles = StyleSheet.create({
     padding: 20,
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
+    marginBottom: 20,
   },
   headerTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   headerTitleText: { color: "white", fontSize: 18, fontWeight: "bold" },
+  headerSubtitle: { color: "white", fontSize: 12, marginTop: 4, opacity: 0.9 },
 
   container: { flex: 1, backgroundColor: "#F0F2F5" },
   scrollBody: { padding: 15, paddingBottom: 30 },
   centerLoading: { flex: 1, justifyContent: "center", alignItems: "center" },
+
+  orgCard: {
+    backgroundColor: "white",
+    padding: 15,
+    borderRadius: 12,
+    marginBottom: 15,
+    elevation: 2,
+  },
+  orgHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  orgTitle: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#333",
+    marginLeft: 8,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: "#DDD",
+    borderRadius: 8,
+    backgroundColor: "#FAFAFA",
+    overflow: "hidden",
+  },
+  picker: {
+    height: 50,
+    width: "100%",
+  },
 
   filterCard: {
     backgroundColor: "white",
@@ -1911,5 +2172,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "bold",
     color: "#DC3545",
+  },
+  emptyContainer: {
+    padding: 50,
+    alignItems: "center",
+    backgroundColor: "white",
+    borderRadius: 12,
+    marginBottom: 15,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: "#999",
+    marginTop: 10,
   },
 });

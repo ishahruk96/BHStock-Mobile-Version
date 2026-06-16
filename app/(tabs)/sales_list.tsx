@@ -2,7 +2,7 @@
 import { ThemedText } from "@/components/themed-text";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, useMemo, useRef } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,11 +17,14 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Picker } from "@react-native-picker/picker";
 
 const { width, height } = Dimensions.get("window");
 
-const API_KEY = "3A734AC6-A521-4192-984D-08D082B83456";
-const API_URL = "http://devmystock.byteheart.com/Stock/GetTransactionsFilter";
+// API URL
+const API_URL = "http://devmystock.byteheart.com/Stock/GetTransactionsForReport";
+const ORG_LIST_URL = "http://devmystock.byteheart.com/Dashboard/GetAllOrganization";
 
 interface Transaction {
   TransactionId: number;
@@ -383,14 +386,21 @@ const FilterModal = ({
 export default function SalesListScreen() {
   const router = useRouter();
 
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [filteredTransactions, setFilteredTransactions] = useState<
-    Transaction[]
-  >([]);
+  const [filteredTransactions, setFilteredTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
+
+  // User session states
+  const [apiKey, setApiKey] = useState<string>("");
+  const [userId, setUserId] = useState<string>("");
+  const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [userName, setUserName] = useState<string>("");
+
+  // Organization selector states
+  const [organizations, setOrganizations] = useState<any[]>([]);
+  const [selectedOrgName, setSelectedOrgName] = useState<string>("");
 
   // Temp filter states
   const [tempSelectedCategory, setTempSelectedCategory] = useState("");
@@ -410,7 +420,7 @@ export default function SalesListScreen() {
   const [categories, setCategories] = useState<string[]>([]);
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
-
+  
   const [summary, setSummary] = useState({
     totalTxn: 0,
     totalQty: 0,
@@ -420,31 +430,124 @@ export default function SalesListScreen() {
     avgProfitMargin: 0,
   });
 
+  // Use ref to track current organization to prevent duplicate calls
+  const currentOrgRef = useRef<number | null>(null);
+
+  // Load user session on mount
   useEffect(() => {
-    fetchTransactions();
+    loadUserSession();
   }, []);
 
-  useEffect(() => {
-    applyFilters();
-  }, [
-    appliedSearchText,
-    appliedSelectedCategory,
-    appliedSelectedStatus,
-    appliedStartDate,
-    appliedEndDate,
-    appliedShowAllHistory,
-    transactions,
-  ]);
+  const loadUserSession = async () => {
+    try {
+      const session = await AsyncStorage.getItem("user_session");
+      if (!session) {
+        Alert.alert("Error", "Session not found. Please login again.");
+        setLoading(false);
+        return;
+      }
 
-  const fetchTransactions = async () => {
+      const userData = JSON.parse(session);
+      const key = userData.ApiKey || "";
+      const uid = userData.UserId;
+      const defaultOrgId = userData.OrganizationId || userData.orgId || null;
+
+      setApiKey(key);
+      setUserId(uid);
+      setUserName(userData.UserName || "User");
+
+      console.log("Loaded session - ApiKey:", key);
+      console.log("Loaded session - UserId:", uid);
+      console.log("Loaded session - Default OrganizationId:", defaultOrgId);
+
+      const headers = {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      };
+
+      let initialOrgId: number | null = defaultOrgId;
+      let initialOrgName = "";
+
+      try {
+        const orgUrl = `${ORG_LIST_URL}?userId=${uid}`;
+        const orgResponse = await fetch(orgUrl, { headers });
+        const orgText = await orgResponse.text();
+        const orgData = JSON.parse(orgText);
+
+        if (
+          orgData &&
+          orgData.success &&
+          Array.isArray(orgData.data) &&
+          orgData.data.length > 0
+        ) {
+          setOrganizations(orgData.data);
+
+          const hasDefaultOrg = orgData.data.some(
+            (o: any) => (o.organizationId || o.id) === defaultOrgId
+          );
+          const initialOrg = hasDefaultOrg
+            ? orgData.data.find(
+                (o: any) => (o.organizationId || o.id) === defaultOrgId
+              )
+            : orgData.data[0];
+
+          initialOrgId = initialOrg.organizationId || initialOrg.id;
+          initialOrgName =
+            initialOrg.organizationName || initialOrg.name || "Unknown Org";
+        } else {
+          setOrganizations([]);
+        }
+      } catch (orgErr) {
+        console.error("Org list fetch error:", orgErr);
+        setOrganizations([]);
+      }
+
+      setOrganizationId(initialOrgId);
+      setSelectedOrgName(initialOrgName);
+      currentOrgRef.current = initialOrgId;
+
+      // Fetch transactions after resolving organization
+      if (key && initialOrgId) {
+        await fetchTransactionsForOrg(key, initialOrgId);
+      } else {
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error("Error loading session:", error);
+      Alert.alert("Error", "Failed to load user session");
+      setLoading(false);
+    }
+  };
+
+  const fetchTransactionsForOrg = async (key: string, orgId: number) => {
+    if (!key) {
+      setError("Authentication key not found");
+      setLoading(false);
+      return;
+    }
+
+    if (!orgId) {
+      setError("Organization ID not found");
+      setLoading(false);
+      return;
+    }
+
     try {
       setError(null);
       setLoading(true);
 
-      const response = await fetch(API_URL, {
+      // Fetch transactions with organization ID in query parameter
+      const url = `${API_URL}?organizationId=${orgId}`;
+      console.log("=========================================");
+      console.log("Fetching transactions for Organization:", orgId);
+      console.log("URL:", url);
+      console.log("API Key:", key.substring(0, 20) + "...");
+      console.log("=========================================");
+
+      const response = await fetch(url, {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${API_KEY}`,
+          Authorization: `Bearer ${key}`,
           "Content-Type": "application/json",
           "Cache-Control": "no-cache, no-store, must-revalidate",
           Pragma: "no-cache",
@@ -452,9 +555,20 @@ export default function SalesListScreen() {
         },
         cache: "no-cache",
       });
+
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      const data = await response.json();
+      const text = await response.text();
+      if (!text || text.trim() === "") {
+        console.log("Empty response received");
+        setFilteredTransactions([]);
+        setCategories([]);
+        calculateSummary([]);
+        setLoading(false);
+        return;
+      }
+
+      const data = JSON.parse(text);
       let transactionsData: Transaction[] = [];
 
       if (Array.isArray(data)) transactionsData = data;
@@ -464,29 +578,75 @@ export default function SalesListScreen() {
         transactionsData = data.result;
       else if (data.items && Array.isArray(data.items))
         transactionsData = data.items;
-      else
+      else {
         for (let key in data) {
           if (Array.isArray(data[key])) {
             transactionsData = data[key];
             break;
           }
         }
-
-      if (transactionsData.length > 0) {
-        setTransactions(transactionsData);
-        const todayTxns = transactionsData.filter((item) =>
-          isToday(item.TransactionDate),
-        );
-        setFilteredTransactions(todayTxns);
-        calculateSummary(todayTxns);
-        setCategories([
-          ...new Set(transactionsData.map((i) => i.Category).filter(Boolean)),
-        ]);
-      } else {
-        setTransactions([]);
-        setFilteredTransactions([]);
       }
+
+      console.log(`✅ Total transactions fetched for org ${orgId}: ${transactionsData.length}`);
+      
+      if (transactionsData.length > 0) {
+        console.log("Sample transaction:", {
+          id: transactionsData[0].TransactionId,
+          orgId: transactionsData[0].OrganizationId,
+          product: transactionsData[0].ProductName
+        });
+      }
+      
+      // Extract unique categories from transactions
+      const uniqueCategories = [
+        ...new Set(transactionsData.map((i) => i.Category).filter(Boolean)),
+      ];
+      setCategories(uniqueCategories);
+      
+      // Apply current filters
+      let filtered = [...transactionsData];
+      
+      if (!appliedShowAllHistory) {
+        if (appliedSearchText) {
+          const q = appliedSearchText.toLowerCase();
+          filtered = filtered.filter(
+            (i) =>
+              i.ProductName?.toLowerCase().includes(q) ||
+              i.TransactionNumber?.toLowerCase().includes(q) ||
+              i.CustomerName?.toLowerCase().includes(q)
+          );
+        }
+        if (appliedSelectedCategory) {
+          filtered = filtered.filter(
+            (i) => i.Category === appliedSelectedCategory
+          );
+        }
+        if (appliedSelectedStatus) {
+          filtered = filtered.filter(
+            (i) => i.PaymentStatus === appliedSelectedStatus
+          );
+        }
+        if (appliedStartDate && appliedEndDate) {
+          filtered = filtered.filter((i) => {
+            const d = parseDateFromJson(i.TransactionDate);
+            if (!d) return false;
+            const [sd, sm, sy] = appliedStartDate.split("/");
+            const [ed, em, ey] = appliedEndDate.split("/");
+            const start = new Date(+sy, +sm - 1, +sd);
+            start.setHours(0, 0, 0, 0);
+            const end = new Date(+ey, +em - 1, +ed);
+            end.setHours(23, 59, 59, 999);
+            return d >= start && d <= end;
+          });
+        }
+      }
+      
+      console.log(`📊 After filters: ${filtered.length} transactions`);
+      setFilteredTransactions(filtered);
+      calculateSummary(filtered);
+      
     } catch (err: any) {
+      console.error("Fetch error:", err);
       setError(err.message || "Failed to fetch transactions");
       Alert.alert("Error", `Failed to load data: ${err.message}`);
     } finally {
@@ -499,11 +659,11 @@ export default function SalesListScreen() {
     const totalQty = data.reduce((s, i) => s + (i.Quantity || 0), 0);
     const totalAmount = data.reduce(
       (s, i) => s + (i.SalesValue || i.TotalAmount || i.Amount || 0),
-      0,
+      0
     );
     const totalProfit = data.reduce(
       (s, i) => s + (i.ProfitPerUnit || 0) * (i.Quantity || 0),
-      0,
+      0
     );
     const totalDue = data.reduce((s, i) => s + (i.DueAmount || 0), 0);
     setSummary({
@@ -516,46 +676,27 @@ export default function SalesListScreen() {
     });
   };
 
-  const applyFilters = () => {
-    let filtered = [...transactions];
-
-    if (!appliedShowAllHistory) {
-      if (appliedSearchText) {
-        const q = appliedSearchText.toLowerCase();
-        filtered = filtered.filter(
-          (i) =>
-            i.ProductName?.toLowerCase().includes(q) ||
-            i.TransactionNumber?.toLowerCase().includes(q) ||
-            i.CustomerName?.toLowerCase().includes(q),
-        );
-      }
-      if (appliedSelectedCategory)
-        filtered = filtered.filter(
-          (i) => i.Category === appliedSelectedCategory,
-        );
-      if (appliedSelectedStatus)
-        filtered = filtered.filter(
-          (i) => i.PaymentStatus === appliedSelectedStatus,
-        );
-
-      if (appliedStartDate && appliedEndDate) {
-        filtered = filtered.filter((i) => {
-          const d = parseDateFromJson(i.TransactionDate);
-          if (!d) return false;
-          const [sd, sm, sy] = appliedStartDate.split("/");
-          const [ed, em, ey] = appliedEndDate.split("/");
-          const start = new Date(+sy, +sm - 1, +sd);
-          start.setHours(0, 0, 0, 0);
-          const end = new Date(+ey, +em - 1, +ed);
-          end.setHours(23, 59, 59, 999);
-          return d >= start && d <= end;
-        });
-      }
+  const applyFiltersToCurrentData = useCallback(() => {
+    // This function is called when filters change, but data is already loaded
+    // We need to re-fetch with current filters
+    if (apiKey && organizationId) {
+      fetchTransactionsForOrg(apiKey, organizationId);
     }
+  }, [apiKey, organizationId, appliedSearchText, appliedSelectedCategory, appliedSelectedStatus, appliedStartDate, appliedEndDate, appliedShowAllHistory]);
 
-    setFilteredTransactions(filtered);
-    calculateSummary(filtered);
-  };
+  // Apply filters when filter criteria change
+  useEffect(() => {
+    if (apiKey && organizationId && !loading) {
+      applyFiltersToCurrentData();
+    }
+  }, [
+    appliedSearchText,
+    appliedSelectedCategory,
+    appliedSelectedStatus,
+    appliedStartDate,
+    appliedEndDate,
+    appliedShowAllHistory,
+  ]);
 
   const handleDatePreset = useCallback((preset: string) => {
     const { start, end } = getDateRange(preset);
@@ -604,192 +745,72 @@ export default function SalesListScreen() {
     setShowFilterModal(false);
   }, []);
 
-  const handleStartDatePress = useCallback(
-    () => setShowStartDatePicker(true),
-    [],
-  );
+  const handleStartDatePress = useCallback(() => setShowStartDatePicker(true), []);
   const handleEndDatePress = useCallback(() => setShowEndDatePicker(true), []);
   const handleCloseModal = useCallback(() => setShowFilterModal(false), []);
 
-  const handleViewDetails = useCallback(
-    (transaction: Transaction) => {
-      router.push({
-        pathname: "/TransactionDetails",
-        params: {
-          transactionNumber: transaction.TransactionNumber,
-          organizationId: transaction.OrganizationId || 3,
-        },
-      });
-    },
-    [router],
-  );
-
-  const renderTable = () => {
-    const totalWidth = 40 + 85 + 140 + 50 + 75 + 85 + 85 + 75 + 80 + 120;
-    return (
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={true}
-        bounces={false}
-      >
-        <View style={{ width: totalWidth }}>
-          {/* Header */}
-          <View style={styles.headerRow}>
-            {[
-              { label: "#", style: styles.cellSn },
-              { label: "Date", style: styles.cellDate },
-              { label: "Product/Invoice", style: styles.cellProduct },
-              { label: "Qty", style: styles.cellQty },
-              { label: "Unit Price", style: styles.cellPrice },
-              { label: "Selling Price", style: styles.cellSales },
-              { label: "Amount", style: styles.cellAmount },
-              { label: "Profit", style: styles.cellProfit },
-              { label: "Status", style: styles.cellStatus },
-              { label: "Actions", style: styles.cellAction },
-            ].map(({ label, style }) => (
-              <View key={label} style={[styles.headerCell, style]}>
-                <ThemedText style={styles.headerText}>{label}</ThemedText>
-              </View>
-            ))}
-          </View>
-
-          {/* Rows */}
-          <FlatList
-            data={filteredTransactions}
-            keyExtractor={(item, index) =>
-              item.TransactionId
-                ? item.TransactionId.toString()
-                : index.toString()
-            }
-            renderItem={({ item, index }) => {
-              const statusColor = getStatusStyle(item.PaymentStatus);
-              const profit = (item.ProfitPerUnit || 0) * (item.Quantity || 0);
-              const amount =
-                item.SalesValue || item.TotalAmount || item.Amount || 0;
-              return (
-                <View style={styles.tableRow}>
-                  <View style={[styles.cell, styles.cellSn, styles.cellBorder]}>
-                    <ThemedText style={styles.cellText}>{index + 1}</ThemedText>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellDate, styles.cellBorder]}
-                  >
-                    <ThemedText style={styles.cellText}>
-                      {formatDate(item.TransactionDate)}
-                    </ThemedText>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellProduct, styles.cellBorder]}
-                  >
-                    <ThemedText style={styles.productName}>
-                      {item.ProductName || "N/A"}
-                    </ThemedText>
-                    <ThemedText style={styles.txnNumber}>
-                      {item.TransactionNumber || "N/A"}
-                    </ThemedText>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellQty, styles.cellBorder]}
-                  >
-                    <ThemedText style={styles.cellText}>
-                      {item.Quantity || 0}
-                    </ThemedText>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellPrice, styles.cellBorder]}
-                  >
-                    <ThemedText style={styles.cellText}>
-                      {(item.UnitPrice || 0).toFixed(2)}
-                    </ThemedText>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellSales, styles.cellBorder]}
-                  >
-                    <ThemedText style={styles.cellText}>
-                      {(item.SalesValue || 0).toFixed(2)}
-                    </ThemedText>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellAmount, styles.cellBorder]}
-                  >
-                    <ThemedText style={styles.amountText}>
-                      {amount.toFixed(2)}
-                    </ThemedText>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellProfit, styles.cellBorder]}
-                  >
-                    <ThemedText style={styles.profitText}>
-                      {profit.toFixed(2)}
-                    </ThemedText>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellStatus, styles.cellBorder]}
-                  >
-                    <View
-                      style={[
-                        styles.statusBadge,
-                        { backgroundColor: statusColor.bg },
-                      ]}
-                    >
-                      <ThemedText
-                        style={[styles.statusText, { color: statusColor.text }]}
-                      >
-                        {item.PaymentStatus || "Unknown"}
-                      </ThemedText>
-                    </View>
-                  </View>
-                  <View
-                    style={[styles.cell, styles.cellAction, styles.cellBorder]}
-                  >
-                    <View style={styles.actionButtons}>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, styles.returnBtn]}
-                        onPress={() => handleViewDetails(item)}
-                      >
-                        <ThemedText style={styles.actionBtnText}>
-                          {item.IsExchangeRelated ? "Exchange" : "Ext/Re"}
-                        </ThemedText>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, styles.editBtn]}
-                        onPress={() => {
-                          router.push({
-                            pathname: "/Edit_Transaction",
-                            params: { transactionId: item.TransactionId },
-                          });
-                        }}
-                      >
-                        <ThemedText style={styles.actionBtnText}>
-                          Edit
-                        </ThemedText>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </View>
-              );
-            }}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={() => {
-                  setRefreshing(true);
-                  fetchTransactions();
-                }}
-              />
-            }
-            showsVerticalScrollIndicator={true}
-          />
-        </View>
-      </ScrollView>
-    );
+  const handleRefresh = () => {
+    setRefreshing(true);
+    if (apiKey && organizationId) {
+      fetchTransactionsForOrg(apiKey, organizationId);
+    }
   };
+
+  const handleRetry = () => {
+    if (apiKey && organizationId) {
+      fetchTransactionsForOrg(apiKey, organizationId);
+    }
+  };
+
+  // Organization change handler
+  const handleOrgChange = useCallback(
+    async (itemValue: any) => {
+      if (itemValue === undefined || itemValue === null) return;
+      const orgIdValue = Number(itemValue);
+      if (orgIdValue === organizationId) return;
+
+      console.log(`🔄 Switching organization from ${organizationId} to ${orgIdValue}`);
+      
+      // Update organization ID state
+      setOrganizationId(orgIdValue);
+      currentOrgRef.current = orgIdValue;
+
+      const currentOrg = organizations.find(
+        (org: any) => (org.organizationId || org.id) === orgIdValue
+      );
+      setSelectedOrgName(
+        currentOrg?.organizationName || currentOrg?.name || "Unknown Org"
+      );
+
+      // Reset filters when switching organization
+      setTempSelectedCategory("");
+      setTempSelectedStatus("");
+      setTempStartDate("");
+      setTempEndDate("");
+      setTempDatePreset("");
+      setAppliedSearchText("");
+      setAppliedSelectedCategory("");
+      setAppliedSelectedStatus("");
+      setAppliedStartDate("");
+      setAppliedEndDate("");
+      setAppliedShowAllHistory(false);
+
+      // Clear current data immediately
+      setFilteredTransactions([]);
+      
+      // Fetch new data for the selected organization
+      if (apiKey) {
+        await fetchTransactionsForOrg(apiKey, orgIdValue);
+      }
+    },
+    [organizationId, organizations, apiKey]
+  );
 
   if (error && !loading) {
     return (
       <View style={styles.centerContainer}>
         <ThemedText style={styles.errorText}>{error}</ThemedText>
-        <TouchableOpacity style={styles.retryBtn} onPress={fetchTransactions}>
+        <TouchableOpacity style={styles.retryBtn} onPress={handleRetry}>
           <ThemedText style={styles.retryBtnText}>Retry</ThemedText>
         </TouchableOpacity>
       </View>
@@ -804,7 +825,13 @@ export default function SalesListScreen() {
     >
       {/* Header */}
       <View style={styles.header}>
-        <ThemedText style={styles.headerTitle}>Sales List</ThemedText>
+        <View>
+          <ThemedText style={styles.headerTitle}>Sales List</ThemedText>
+          <ThemedText style={styles.headerSubtitle}>
+            Welcome, {userName}
+            {selectedOrgName ? ` | ${selectedOrgName}` : ""}
+          </ThemedText>
+        </View>
         <TouchableOpacity
           style={styles.filterBtn}
           onPress={() => setShowFilterModal(true)}
@@ -812,6 +839,24 @@ export default function SalesListScreen() {
           <ThemedText style={styles.filterBtnText}>Filter</ThemedText>
         </TouchableOpacity>
       </View>
+
+      {/* Organization Picker - always show if organizations exist */}
+      {organizations.length > 0 && (
+        <View style={styles.orgPickerContainer}>
+          <Picker
+            selectedValue={organizationId ?? undefined}
+            onValueChange={handleOrgChange}
+            style={styles.orgPicker}
+            dropdownIconColor="#007bff"
+          >
+            {organizations.map((org: any, index: number) => {
+              const id = org.organizationId || org.id;
+              const name = org.organizationName || org.name || "Unknown Org";
+              return <Picker.Item key={id || index} label={name} value={id} />;
+            })}
+          </Picker>
+        </View>
+      )}
 
       {/* Search Bar */}
       <View style={styles.searchContainer}>
@@ -870,82 +915,243 @@ export default function SalesListScreen() {
         </View>
       )}
 
-      {/* Summary Cards - Box Style - Smaller Font & No Borders */}
+      {/* Summary Cards */}
       {filteredTransactions.length > 0 && (
-        <View style={styles.summaryContainer}>
-          <View style={styles.summaryHeader}>
-            <ThemedText style={styles.summaryTitle}>Sales Summary</ThemedText>
-          </View>
+  <View style={styles.summaryContainer}>
+    <View style={styles.summaryHeader}>
+      <ThemedText style={styles.summaryTitle}>
+        Sales Summary {selectedOrgName ? `- ${selectedOrgName}` : ""}
+      </ThemedText>
+    </View>
 
-          {/* Summary Grid with Boxes - 2 Rows x 3 Columns */}
-          <View style={styles.summaryGrid}>
-            {/* Row 1 */}
-            <View style={styles.summaryCard}>
-              <ThemedText style={styles.summaryCardValue}>
-                {summary.totalTxn}
-              </ThemedText>
-              <ThemedText style={styles.summaryCardLabel}>
-                Transactions
-              </ThemedText>
-            </View>
+    <View style={styles.summaryGrid}>
+      <View style={styles.summaryBox}>
+        <ThemedText style={styles.summaryLabel}>Transactions</ThemedText>
+        <ThemedText style={styles.summaryValue}>
+          {summary.totalTxn}
+        </ThemedText>
+      </View>
 
-            <View style={styles.summaryCard}>
-              <ThemedText style={styles.summaryCardValue}>
-                {summary.totalQty}
-              </ThemedText>
-              <ThemedText style={styles.summaryCardLabel}>
-                Total Quantity
-              </ThemedText>
-            </View>
+      <View style={styles.summaryBox}>
+        <ThemedText style={styles.summaryLabel}>Total Quantity</ThemedText>
+        <ThemedText style={styles.summaryValue}>
+          {summary.totalQty}
+        </ThemedText>
+      </View>
 
-            <View style={[styles.summaryCard, styles.summaryCardHighlight]}>
-              <ThemedText
-                style={[styles.summaryCardValue, styles.highlightText]}
-              >
-                ৳{summary.totalAmount.toFixed(2)}
-              </ThemedText>
-              <ThemedText
-                style={[styles.summaryCardLabel, styles.highlightLabel]}
-              >
-                Total Amount
-              </ThemedText>
-            </View>
+      <View style={styles.summaryBox}>
+        <ThemedText style={styles.summaryLabel}>Total Amount</ThemedText>
+        <ThemedText style={[styles.summaryValue, styles.greenText]}>
+          ৳{summary.totalAmount.toFixed(2)}
+        </ThemedText>
+      </View>
 
-            {/* Row 2 */}
-            <View style={[styles.summaryCard, styles.summaryCardProfit]}>
-              <ThemedText style={[styles.summaryCardValue, styles.profitText]}>
-                ৳{summary.totalProfit.toFixed(2)}
-              </ThemedText>
-              <ThemedText style={[styles.summaryCardLabel, styles.profitLabel]}>
-                Total Profit
-              </ThemedText>
-            </View>
+      <View style={styles.summaryBox}>
+        <ThemedText style={styles.summaryLabel}>Total Profit</ThemedText>
+        <ThemedText style={[styles.summaryValue, styles.profitText]}>
+          ৳{summary.totalProfit.toFixed(2)}
+        </ThemedText>
+      </View>
 
-            <View style={[styles.summaryCard, styles.summaryCardDue]}>
-              <ThemedText style={[styles.summaryCardValue, styles.dueText]}>
-                ৳{summary.totalDue.toFixed(2)}
-              </ThemedText>
-              <ThemedText style={[styles.summaryCardLabel, styles.dueLabel]}>
-                Total Due
-              </ThemedText>
-            </View>
+      <View style={styles.summaryBox}>
+        <ThemedText style={styles.summaryLabel}>Total Due</ThemedText>
+        <ThemedText style={[styles.summaryValue, styles.dueText]}>
+          ৳{summary.totalDue.toFixed(2)}
+        </ThemedText>
+      </View>
 
-            <View style={styles.summaryCard}>
-              <ThemedText style={styles.summaryCardValue}>
-                {summary.avgProfitMargin.toFixed(1)}%
-              </ThemedText>
-              <ThemedText style={styles.summaryCardLabel}>
-                Avg Profit Margin
-              </ThemedText>
-            </View>
-          </View>
-        </View>
-      )}
+      <View style={styles.summaryBox}>
+        <ThemedText style={styles.summaryLabel}>
+          Avg Profit Margin
+        </ThemedText>
+        <ThemedText style={[styles.summaryValue, styles.blueText]}>
+          {summary.avgProfitMargin.toFixed(1)}%
+        </ThemedText>
+      </View>
+    </View>
+  </View>
+)}
 
       {/* Table */}
       <View style={styles.tableContainer}>
         {filteredTransactions.length > 0 ? (
-          renderTable()
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={true}
+            bounces={false}
+          >
+            <View
+              style={{ width: 40 + 85 + 140 + 50 + 75 + 85 + 85 + 75 + 80 + 120 }}
+            >
+              {/* Header */}
+              <View style={styles.headerRow}>
+                {[
+                  { label: "#", style: styles.cellSn },
+                  { label: "Date", style: styles.cellDate },
+                  { label: "Product/Invoice", style: styles.cellProduct },
+                  { label: "Qty", style: styles.cellQty },
+                  { label: "Unit Price", style: styles.cellPrice },
+                  { label: "Selling Price", style: styles.cellSales },
+                  { label: "Amount", style: styles.cellAmount },
+                  { label: "Profit", style: styles.cellProfit },
+                  { label: "Status", style: styles.cellStatus },
+                  { label: "Actions", style: styles.cellAction },
+                ].map(({ label, style }) => (
+                  <View key={label} style={[styles.headerCell, style]}>
+                    <ThemedText style={styles.headerText}>{label}</ThemedText>
+                  </View>
+                ))}
+              </View>
+
+              {/* Rows */}
+              <FlatList
+                data={filteredTransactions}
+                keyExtractor={(item, index) =>
+                  item.TransactionId
+                    ? `${item.TransactionId}-${organizationId}`
+                    : `${index}-${organizationId}`
+                }
+                renderItem={({ item, index }) => {
+                  const statusColor = getStatusStyle(item.PaymentStatus);
+                  const profit =
+                    (item.ProfitPerUnit || 0) * (item.Quantity || 0);
+                  const amount =
+                    item.SalesValue || item.TotalAmount || item.Amount || 0;
+                  return (
+                    <View style={styles.tableRow}>
+                      <View
+                        style={[styles.cell, styles.cellSn, styles.cellBorder]}
+                      >
+                        <ThemedText style={styles.cellText}>
+                          {index + 1}
+                        </ThemedText>
+                      </View>
+                      <View
+                        style={[styles.cell, styles.cellDate, styles.cellBorder]}
+                      >
+                        <ThemedText style={styles.cellText}>
+                          {formatDate(item.TransactionDate)}
+                        </ThemedText>
+                      </View>
+                      <View
+                        style={[
+                          styles.cell,
+                          styles.cellProduct,
+                          styles.cellBorder,
+                        ]}
+                      >
+                        <ThemedText style={styles.productName}>
+                          {item.ProductName || "N/A"}
+                        </ThemedText>
+                        <ThemedText style={styles.txnNumber}>
+                          {item.TransactionNumber || "N/A"}
+                        </ThemedText>
+                      </View>
+                      <View
+                        style={[styles.cell, styles.cellQty, styles.cellBorder]}
+                      >
+                        <ThemedText style={styles.cellText}>
+                          {item.Quantity || 0}
+                        </ThemedText>
+                      </View>
+                      <View
+                        style={[styles.cell, styles.cellPrice, styles.cellBorder]}
+                      >
+                        <ThemedText style={styles.cellText}>
+                          {(item.UnitPrice || 0).toFixed(2)}
+                        </ThemedText>
+                      </View>
+                      <View
+                        style={[styles.cell, styles.cellSales, styles.cellBorder]}
+                      >
+                        <ThemedText style={styles.cellText}>
+                          {(item.SalesValue || 0).toFixed(2)}
+                        </ThemedText>
+                      </View>
+                      <View
+                        style={[styles.cell, styles.cellAmount, styles.cellBorder]}
+                      >
+                        <ThemedText style={styles.amountText}>
+                          {amount.toFixed(2)}
+                        </ThemedText>
+                      </View>
+                      <View
+                        style={[styles.cell, styles.cellProfit, styles.cellBorder]}
+                      >
+                        <ThemedText style={styles.profitText}>
+                          {profit.toFixed(2)}
+                        </ThemedText>
+                      </View>
+                      <View
+                        style={[styles.cell, styles.cellStatus, styles.cellBorder]}
+                      >
+                        <View
+                          style={[
+                            styles.statusBadge,
+                            { backgroundColor: statusColor.bg },
+                          ]}
+                        >
+                          <ThemedText
+                            style={[
+                              styles.statusText,
+                              { color: statusColor.text },
+                            ]}
+                          >
+                            {item.PaymentStatus || "Unknown"}
+                          </ThemedText>
+                        </View>
+                      </View>
+                      <View
+                        style={[styles.cell, styles.cellAction, styles.cellBorder]}
+                      >
+                        <View style={styles.actionButtons}>
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.returnBtn]}
+                            onPress={() => {
+                              router.push({
+                                pathname: "/ret_ex_transaction",
+                                params: {
+                                  transactionId: item.TransactionId,
+                                  organizationId: organizationId,
+                                },
+                              });
+                            }}
+                          >
+                            <ThemedText style={styles.actionBtnText}>
+                              Ext/Ret
+                            </ThemedText>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.editBtn]}
+                            onPress={() => {
+                              router.push({
+                                pathname: "/Edit_Transaction",
+                                params: {
+                                  transactionId: item.TransactionId,
+                                  organizationId: organizationId,
+                                },
+                              });
+                            }}
+                          >
+                            <ThemedText style={styles.actionBtnText}>
+                              Edit
+                            </ThemedText>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  );
+                }}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={handleRefresh}
+                  />
+                }
+                showsVerticalScrollIndicator={true}
+              />
+            </View>
+          </ScrollView>
         ) : loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#007bff" />
@@ -956,12 +1162,9 @@ export default function SalesListScreen() {
         ) : (
           <View style={styles.emptyContainer}>
             <ThemedText style={styles.emptyText}>
-              No Transactions Found
+              No Transactions Found for {selectedOrgName}
             </ThemedText>
-            <TouchableOpacity
-              style={styles.retryBtn}
-              onPress={fetchTransactions}
-            >
+            <TouchableOpacity style={styles.retryBtn} onPress={handleRetry}>
               <ThemedText style={styles.retryBtnText}>Refresh</ThemedText>
             </TouchableOpacity>
           </View>
@@ -1040,6 +1243,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e0e0e0",
   },
   headerTitle: { fontSize: 20, fontWeight: "bold", color: "#333" },
+  headerSubtitle: { fontSize: 11, color: "#666", marginTop: 2 },
   filterBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -1047,6 +1251,21 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   filterBtnText: { color: "#fff", fontSize: 14, fontWeight: "bold" },
+
+  orgPickerContainer: {
+    backgroundColor: "#fff",
+    marginHorizontal: 12,
+    marginTop: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    overflow: "hidden",
+  },
+  orgPicker: {
+    height: 50,
+    width: "100%",
+    color: "#333",
+  },
 
   searchContainer: {
     padding: 12,
@@ -1092,67 +1311,68 @@ const styles = StyleSheet.create({
   allHistoryText: { color: "#fff", fontSize: 12, fontWeight: "bold" },
 
   summaryContainer: {
-    backgroundColor: "#fff",
-    margin: 12,
-    borderRadius: 12,
-    overflow: "hidden",
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  summaryHeader: { padding: 16, backgroundColor: "#007bff" },
-  summaryTitle: { fontSize: 18, fontWeight: "bold", color: "#fff" },
-  summarySubtitle: { fontSize: 12, color: "#cce5ff", marginTop: 4 },
+  marginHorizontal: 12,
+  marginVertical: 10,
+  borderRadius: 14,
+  overflow: "hidden",
+  backgroundColor: "#FFFFFF",
+  elevation: 4,
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.1,
+  shadowRadius: 4,
+},
 
-  summaryGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    padding: 12,
-    gap: 12,
-    justifyContent: "space-between",
-  },
+summaryHeader: {
+  backgroundColor: "#67B968",
+  paddingVertical: 10,
+  paddingHorizontal: 12,
+},
 
-  summaryCard: {
-    flex: 1,
-    minWidth: "30%",
-    backgroundColor: "#f8f9fa",
-    padding: 12,
-    borderRadius: 8,
-    alignItems: "center",
-    gap: 6,
-    elevation: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-  },
+summaryTitle: {
+  color: "#FFFFFF",
+  fontSize: 15,
+  fontWeight: "700",
+  textAlign: "center",
+},
 
-  summaryCardHighlight: {
-    backgroundColor: "#e3f2fd",
-  },
+summaryGrid: {
+  flexDirection: "row",
+  flexWrap: "wrap",
+},
 
-  summaryCardProfit: {
-    backgroundColor: "#e8f5e9",
-  },
+summaryBox: {
+  width: "33.33%",
+  height: 80,
+  justifyContent: "center",
+  alignItems: "center",
+  borderWidth: 0.5,
+  borderColor: "#E5E7EB",
+  backgroundColor: "#FAFAFA",
+  paddingHorizontal: 4,
+},
 
-  summaryCardDue: {
-    backgroundColor: "#fff3e0",
-  },
+summaryLabel: {
+  fontSize: 10,
+  color: "#6B7280",
+  textAlign: "center",
+  marginBottom: 4,
+},
 
-  summaryCardValue: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#333",
-  },
+summaryValue: {
+  fontSize: 15,
+  fontWeight: "700",
+  color: "#1F2937",
+  textAlign: "center",
+},
 
-  summaryCardLabel: {
-    fontSize: 10,
-    color: "#666",
-    fontWeight: "500",
-    textAlign: "center",
-  },
+greenText: {
+  color: "#2E7D32",
+},
+
+blueText: {
+  color: "#2563EB",
+},
 
   highlightText: { color: "#007bff" },
   highlightLabel: { color: "#007bff", fontSize: 10 },
@@ -1332,7 +1552,12 @@ const styles = StyleSheet.create({
     padding: 60,
     gap: 12,
   },
-  emptyText: { fontSize: 14, color: "#999" },
+  emptyText: {
+    textAlign: "center",
+    marginTop: 12,
+    fontSize: 14,
+    color: "#999",
+  },
   errorText: {
     textAlign: "center",
     marginTop: 12,

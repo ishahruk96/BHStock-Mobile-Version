@@ -9,9 +9,12 @@ import {
   Modal,
   SafeAreaView,
   TextInput,
-  ScrollView, // স্ক্রল করার জন্য যুক্ত করা হয়েছে
+  ScrollView,
+  Alert,
 } from 'react-native';
 import { MaterialIcons } from "@expo/vector-icons";
+import { Picker } from "@react-native-picker/picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 interface Customer {
   CustomerId: number;
@@ -26,40 +29,205 @@ interface Customer {
   UpdatedDate: string | null;
 }
 
+interface Organization {
+  OrganizationId: number;
+  ApiKey: string;
+  OrganizationName?: string;
+}
+
+interface UserSession {
+  Success: boolean;
+  Message: string;
+  Token: string | null;
+  UserId: string;
+  UserName: string;
+  RoleName: string;
+  OrganizationId: number;
+  OrganizationName: string;
+  ApiKey: string;
+  Organizations: Organization[];
+}
+
 export default function CustomerListScreen() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [modalVisible, setModalVisible] = useState<boolean>(false);
+  
+  // Organization States
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [organizationName, setOrganizationName] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [orgLoading, setOrgLoading] = useState<boolean>(true);
+
+  // Load user session on mount
+  useEffect(() => {
+    loadUserSession();
+  }, []);
+
+  // Fetch customers when organization changes
+  useEffect(() => {
+    if (organizationId && apiKey) {
+      fetchCustomers();
+    }
+  }, [organizationId, apiKey]);
+
+  const loadUserSession = async () => {
+    try {
+      const session = await AsyncStorage.getItem("user_session");
+      if (!session) {
+        Alert.alert("Error", "Session not found. Please login again.");
+        setOrgLoading(false);
+        setLoading(false);
+        return;
+      }
+
+      const userData: UserSession = JSON.parse(session);
+      
+      if (userData.Organizations && userData.Organizations.length > 0) {
+        try {
+          const headers = {
+            Authorization: `Bearer ${userData.ApiKey}`,
+            "Content-Type": "application/json",
+          };
+          const orgUrl = `http://devmystock.byteheart.com/Dashboard/GetAllOrganization?userId=${userData.UserId}`;
+          const orgResponse = await fetch(orgUrl, { headers });
+          const orgData = await orgResponse.json();
+          
+          const orgNameMap = new Map();
+          if (orgData && orgData.success && Array.isArray(orgData.data)) {
+            orgData.data.forEach((org: any) => {
+              const id = org.organizationId || org.id;
+              const name = org.organizationName || org.name;
+              if (id && name) {
+                orgNameMap.set(id, name);
+              }
+            });
+          }
+          
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: orgNameMap.get(org.OrganizationId) || `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName || userData.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          } else {
+            const firstOrg = orgsWithNames[0];
+            setOrganizationId(firstOrg.OrganizationId);
+            setOrganizationName(firstOrg.OrganizationName || `Organization ${firstOrg.OrganizationId}`);
+            setApiKey(firstOrg.ApiKey);
+          }
+        } catch (error) {
+          console.error("Error fetching organization names:", error);
+          Alert.alert("Error", "Failed to load organization information");
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          }
+        }
+      } else {
+        Alert.alert("Error", "No organizations found for this user");
+        setOrgLoading(false);
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error("Error loading session:", error);
+      Alert.alert("Error", "Failed to load user session");
+      setOrgLoading(false);
+      setLoading(false);
+    } finally {
+      setOrgLoading(false);
+    }
+  };
+
+  const handleOrgChange = (orgId: number) => {
+    if (orgId === 0) return;
+    
+    const selectedOrg = organizations.find(org => org.OrganizationId === orgId);
+    if (selectedOrg) {
+      setOrganizationId(selectedOrg.OrganizationId);
+      setOrganizationName(selectedOrg.OrganizationName || `Organization ${selectedOrg.OrganizationId}`);
+      setApiKey(selectedOrg.ApiKey);
+      // Reset data when organization changes
+      setCustomers([]);
+      setSearchQuery("");
+    } else {
+      Alert.alert("Error", "Organization not found");
+    }
+  };
 
   const fetchCustomers = async () => {
+    if (!organizationId || !apiKey) {
+      Alert.alert("Error", "Organization or API key not found");
+      setLoading(false);
+      return;
+    }
+
     try {
-      const response = await fetch('http://devmystock.byteheart.com/Customer/FilterCustomer', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer 3A734AC6-A521-4192-984D-08D082B83456', 
-        },
-      });
+      setLoading(true);
+      const response = await fetch(
+        `http://devmystock.byteheart.com/Customer/FilterCustomer?organizationId=${organizationId}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+        }
+      );
       
+      if (!response.ok) {
+        if (response.status === 401) {
+          Alert.alert("Error", "Unauthorized. Invalid API key for this organization.");
+          setLoading(false);
+          return;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
+
       const result = await response.json();
+      console.log("=== Customer API Response ===");
+      console.log("Full Response:", JSON.stringify(result, null, 2));
       
       if (result.success && Array.isArray(result.data)) {
         setCustomers(result.data);
+        if (result.data.length === 0) {
+          Alert.alert("Info", "No customers found for this organization");
+        }
       } else {
         console.warn('API Response status is not success or data is empty');
+        setCustomers([]);
+        Alert.alert("Error", result.message || "Failed to fetch customers");
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching data:', error);
+      Alert.alert("Error", `Failed to fetch customers: ${error.message || "Network error"}`);
+      setCustomers([]);
     } finally {
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
 
   const handleDetails = (customer: Customer) => {
     setSelectedCustomer(customer);
@@ -85,10 +253,11 @@ export default function CustomerListScreen() {
     customer.Email?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  if (loading) {
+  if (orgLoading || loading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#28A745" />
+        <Text style={{ marginTop: 10, color: '#666' }}>Loading...</Text>
       </View>
     );
   }
@@ -98,6 +267,37 @@ export default function CustomerListScreen() {
       <Text style={styles.title}>Customer Management</Text>
       <View style={styles.titleUnderline} />
 
+      {/* Organization Selector */}
+      {organizations.length > 0 && (
+        <View style={styles.orgCard}>
+          <View style={styles.orgHeader}>
+            <MaterialIcons name="business" size={18} color="#28A745" />
+            <Text style={styles.orgTitle}>Organization</Text>
+          </View>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={organizationId || 0}
+              onValueChange={handleOrgChange}
+              style={styles.picker}
+            >
+              {/* <Picker.Item label="-- Select Organization --" value={0} /> */}
+              {organizations.map((org) => (
+                <Picker.Item
+                  key={org.OrganizationId}
+                  label={org.OrganizationName || `Organization ${org.OrganizationId}`}
+                  value={org.OrganizationId}
+                />
+              ))}
+            </Picker>
+          </View>
+          {organizationName ? (
+            <Text style={styles.selectedOrgText}>
+              Selected: {organizationName}
+            </Text>
+          ) : null}
+        </View>
+      )}
+
       <TextInput
         style={styles.searchBar}
         placeholder="Search by name, phone, email..."
@@ -106,9 +306,8 @@ export default function CustomerListScreen() {
         onChangeText={setSearchQuery}
       />
 
-      {/* Horizontal ScrollView: এটি টেবিলটিকে বাম-ডান স্ক্রল করার সুবিধা দেয় */}
+      {/* Horizontal ScrollView */}
       <ScrollView horizontal={true} showsHorizontalScrollIndicator={true}>
-        {/* টেবিলের ফিক্সড উইডথ দেওয়া হয়েছে যেন কলামগুলো ছোট স্ক্রিনেও চ্যাপ্টা না হয়ে যায় */}
         <View style={styles.tableBorderWrapper}>
           
           {/* Table Header */}
@@ -156,8 +355,8 @@ export default function CustomerListScreen() {
               </View>
             )}
             ListEmptyComponent={
-              <View style={[styles.center, { width: 600 }]}>
-                <Text style={{ marginTop: 40, color: '#64748B', paddingBottom: 20 }}>No entries found</Text>
+              <View style={[styles.center, { width: 620, paddingVertical: 40 }]}>
+                <Text style={{ color: '#64748B' }}>No customers found</Text>
               </View>
             }
           />
@@ -242,13 +441,52 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   
-  // Table Scroll Wrapper
+  // Organization Styles
+  orgCard: {
+    backgroundColor: 'white',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  orgHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  orgTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginLeft: 8,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 6,
+    backgroundColor: '#FAFAFA',
+    overflow: 'hidden',
+  },
+  picker: {
+    height: 50,
+    width: '100%',
+  },
+  selectedOrgText: {
+    fontSize: 12,
+    color: '#28A745',
+    marginTop: 8,
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+
+  // Table Styles
   tableBorderWrapper: {
     borderWidth: 1,
     borderColor: '#CCCCCC', 
     borderRadius: 4,
     overflow: 'hidden',
-    width: 620, // টেবিলের টোটাল ফিক্সড উইডথ (বাম-ডান স্ক্রলের জন্য জরুরি)
+    width: 620,
   },
   row: {
     flexDirection: 'row',
@@ -280,7 +518,7 @@ const styles = StyleSheet.create({
     borderRightColor: 'rgba(255, 255, 255, 0.3)', 
   },
 
-  // কলামগুলোর নির্দিষ্ট ফিক্সড উইডথ (যাতে স্ক্রল করার সময় কলাম সুন্দর দেখায়)
+  // Column Widths
   colSl: { width: 45 },
   colName: { width: 150 },
   colPhone: { width: 130 },

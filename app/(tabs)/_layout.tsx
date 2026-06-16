@@ -115,7 +115,6 @@ export default function TabLayout() {
               {/* SALES */}
               <Text style={styles.title}>Sales</Text>
               <View style={styles.grid}>
-                <MenuItem label="Test" icon="test-circle" onPress={() => go("/TransactionDetails")} />
                 <MenuItem label="Single Entry" icon="add-circle" onPress={() => go("/sales/single_sales_entry")} />
                 <MenuItem label="Sales Entry" icon="create" onPress={() => go("/sales/sales_entry")} />
                 <MenuItem label="Bulk Entry" icon="layers" onPress={() => go("/sales/sales_bulk_entry")} />
@@ -128,10 +127,10 @@ export default function TabLayout() {
               <View style={styles.grid}>
                 <MenuItem label="Register" icon="person-add" onPress={() => go("/security/register")} />
                 <MenuItem label="Users" icon="people" onPress={() => go("/security/user_management")} />
-                <MenuItem label="Permissions" icon="lock-closed" onPress={() => go("/security/permissions")} />
-                <MenuItem label="Organization" icon="business" onPress={() => go("/security/organization")} />
+                {/* <MenuItem label="Permissions" icon="lock-closed" onPress={() => go("/security/permissions")} />
+                <MenuItem label="Organization" icon="business" onPress={() => go("/security/organization")} /> */}
                 <MenuItem label="Customer" icon="person" onPress={() => go("/security/customer")} />
-                <MenuItem label="Access Control" icon="key" onPress={() => go("/security/access_control")} />
+                {/* <MenuItem label="Access Control" icon="key" onPress={() => go("/security/access_control")} /> */}
               </View>
 
               {/* OTHERS */}

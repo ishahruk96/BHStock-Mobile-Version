@@ -1,7 +1,8 @@
 import { ThemedText } from "@/components/themed-text";
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
-import React, { useEffect, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import React, { useEffect, useState, useRef } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,9 +14,11 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  KeyboardAvoidingView,
+  TouchableWithoutFeedback,
+  Keyboard,
 } from "react-native";
 
-const API_KEY = "3A734AC6-A521-4192-984D-08D082B83456";
 const BASE_URL = "http://devmystock.byteheart.com";
 
 const SAVE_API_ENDPOINTS = [
@@ -26,12 +29,31 @@ const SAVE_API_ENDPOINTS = [
   "/api/products/Stock/SaveAPI",
 ];
 
+interface Organization {
+  OrganizationId: number;
+  ApiKey: string;
+  OrganizationName?: string;
+}
+
+interface UserSession {
+  Success: boolean;
+  Message: string;
+  Token: string | null;
+  UserId: string;
+  UserName: string;
+  RoleName: string;
+  OrganizationId: number;
+  OrganizationName: string;
+  ApiKey: string;
+  Organizations: Organization[];
+}
+
 // Helper function for API calls with authentication
-const apiRequest = async (endpoint: string, options: RequestInit = {}) => {
+const apiRequest = async (endpoint: string, apiKey: string, options: RequestInit = {}) => {
   const response = await fetch(`${BASE_URL}${endpoint}`, {
     ...options,
     headers: {
-      Authorization: `Bearer ${API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       ...options.headers,
     },
@@ -53,9 +75,10 @@ const calculateFIFOProfit = async (
   productId: number,
   quantity: number,
   salesPrice: number,
+  apiKey: string,
 ) => {
   try {
-    const data = await apiRequest("/Stock/CalculateFIFOProfit", {
+    const data = await apiRequest("/Stock/CalculateFIFOProfit", apiKey, {
       method: "POST",
       body: JSON.stringify({
         organizationId: organizationId,
@@ -134,6 +157,7 @@ export default function SingleSalesEntry() {
   const [products, setProducts] = useState<any[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<any[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [quantity, setQuantity] = useState("");
   const [salePrice, setSalePrice] = useState("");
@@ -146,34 +170,159 @@ export default function SingleSalesEntry() {
   const [customerAddress, setCustomerAddress] = useState("");
   const [cart, setCart] = useState<any[]>([]);
   const [loadingProfit, setLoadingProfit] = useState<number | null>(null);
-  const [organizationId, setOrganizationId] = useState<number | null>(null); // Default organization ID
+  const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [organizationName, setOrganizationName] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [debugInfo, setDebugInfo] = useState("");
+  const scrollViewRef = useRef<ScrollView>(null);
 
   const [date] = useState(() => {
     const today = new Date();
     return today.toISOString().split("T")[0];
   });
 
+  // Load user session on mount
   useEffect(() => {
-    fetchCategories();
-    fetchProducts();
+    loadUserSession();
   }, []);
 
+  // Fetch data when organization changes
   useEffect(() => {
-    if (selectedCategory && products.length > 0) {
-      const filtered = products.filter((p) => p.Category === selectedCategory);
-      setFilteredProducts(filtered);
-      console.log(
-        `Filtered products for ${selectedCategory}:`,
-        filtered.length,
-      );
-    } else {
-      setFilteredProducts([]);
+    if (organizationId && apiKey) {
+      fetchCategories();
+      fetchProducts();
     }
+  }, [organizationId, apiKey]);
+
+  // Filter products when category changes
+  useEffect(() => {
+  if (selectedProductId && selectedProductId !== null) {
+    const productList = filteredProducts.length > 0 ? filteredProducts : products;
+    const product = productList.find((p) => p.ProductId === selectedProductId);
+    if (product) {
+      setSelectedProduct(product);
+      setSalePrice(String(product.SalesValue || product.UnitPrice || 0));
+      if (product.Category) {
+        setSelectedCategory(product.Category);
+      }
+    } else {
+      setSelectedProduct(null);
+      setQuantity("");
+      setSalePrice("");
+    }
+  } else {
     setSelectedProduct(null);
     setQuantity("");
     setSalePrice("");
-  }, [selectedCategory, products]);
+  }
+  setQuantity("");
+}, [selectedProductId, filteredProducts, products]);
+
+  // Update selected product when productId changes
+  useEffect(() => {
+    if (selectedProductId && selectedProductId !== null) {
+      const productList = filteredProducts.length > 0 ? filteredProducts : products;
+      const product = productList.find((p) => p.ProductId === selectedProductId);
+      if (product) {
+        setSelectedProduct(product);
+        setSalePrice(String(product.SalesValue || product.UnitPrice || 0));
+        if (product.Category) {
+          setSelectedCategory(product.Category);
+        }
+      } else {
+        setSelectedProduct(null);
+        setQuantity("");
+        setSalePrice("");
+      }
+    } else {
+      setSelectedProduct(null);
+      setQuantity("");
+      setSalePrice("");
+    }
+    setQuantity("");
+  }, [selectedProductId, filteredProducts, products]);
+
+  const loadUserSession = async () => {
+    try {
+      const session = await AsyncStorage.getItem("user_session");
+      if (!session) {
+        Alert.alert("Error", "Session not found. Please login again.");
+        setLoading(false);
+        return;
+      }
+
+      const userData: UserSession = JSON.parse(session);
+      
+      if (userData.Organizations && userData.Organizations.length > 0) {
+        // Get organization names from API
+        try {
+          const headers = {
+            Authorization: `Bearer ${userData.ApiKey}`,
+            "Content-Type": "application/json",
+          };
+          const orgUrl = `http://devmystock.byteheart.com/Dashboard/GetAllOrganization?userId=${userData.UserId}`;
+          const orgResponse = await fetch(orgUrl, { headers });
+          const orgData = await orgResponse.json();
+          
+          const orgNameMap = new Map();
+          if (orgData && orgData.success && Array.isArray(orgData.data)) {
+            orgData.data.forEach((org: any) => {
+              const id = org.organizationId || org.id;
+              const name = org.organizationName || org.name;
+              if (id && name) {
+                orgNameMap.set(id, name);
+              }
+            });
+          }
+          
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: orgNameMap.get(org.OrganizationId) || `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          // Find default organization
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName || userData.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          } else {
+            const firstOrg = orgsWithNames[0];
+            setOrganizationId(firstOrg.OrganizationId);
+            setOrganizationName(firstOrg.OrganizationName || `Organization ${firstOrg.OrganizationId}`);
+            setApiKey(firstOrg.ApiKey);
+          }
+        } catch (error) {
+          console.error("Error fetching organization names:", error);
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          }
+        }
+      } else {
+        Alert.alert("Error", "No organizations found for this user");
+      }
+    } catch (error) {
+      console.error("Error loading session:", error);
+      Alert.alert("Error", "Failed to load user session");
+    }
+  };
 
   const fetchCategories = async () => {
     try {
@@ -184,7 +333,7 @@ export default function SingleSalesEntry() {
       }
 
       console.log("Fetching categories from:", url);
-      const data = await apiRequest(url);
+      const data = await apiRequest(url, apiKey);
       console.log("Categories API Response:", JSON.stringify(data, null, 2));
 
       let categoriesList: string[] = [];
@@ -228,10 +377,6 @@ export default function SingleSalesEntry() {
 
       if (categoriesList.length === 0) {
         console.warn("No categories found in response");
-        Alert.alert(
-          "Warning",
-          "No categories found. Please check API connection.",
-        );
       }
     } catch (error: any) {
       console.error("Error fetching categories:", error);
@@ -250,7 +395,7 @@ export default function SingleSalesEntry() {
       }
 
       console.log("Fetching products from:", url);
-      const data = await apiRequest(url);
+      const data = await apiRequest(url, apiKey);
       console.log(
         "Products API Response (first item):",
         JSON.stringify(data?.[0] || data?.data?.[0], null, 2),
@@ -313,6 +458,7 @@ export default function SingleSalesEntry() {
       selectedProduct.ProductId,
       qty,
       price,
+      apiKey,
     );
 
     setLoadingProfit(null);
@@ -338,6 +484,8 @@ export default function SingleSalesEntry() {
       },
     ]);
 
+    // Reset after adding to cart
+    setSelectedProductId(null);
     setSelectedProduct(null);
     setQuantity("");
     setSalePrice("");
@@ -405,14 +553,13 @@ export default function SingleSalesEntry() {
       let responseData = null;
       let lastError = null;
 
-      // বিভিন্ন endpoint试试 করুন
       for (const endpoint of SAVE_API_ENDPOINTS) {
         try {
           console.log(`Trying endpoint: ${endpoint}`);
           const response = await fetch(`${BASE_URL}${endpoint}`, {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${API_KEY}`,
+              Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify(saleData),
@@ -522,9 +669,9 @@ export default function SingleSalesEntry() {
     }
   };
 
-  // রিসেট ফাংশন (আগের মতোই)
   const resetForm = () => {
     setCart([]);
+    setSelectedProductId(null);
     setSelectedProduct(null);
     setSelectedCategory(null);
     setQuantity("");
@@ -538,13 +685,28 @@ export default function SingleSalesEntry() {
     setCustomerAddress("");
   };
 
-  // এই হ্যান্ডলারগুলি আগের মতোই থাকবে
   const handleSaveSale = () => {
     saveSale(false);
   };
 
   const handleSaveAndPrint = () => {
     saveSale(true);
+  };
+
+  const handleOrgChange = (orgId: number | null) => {
+    if (!orgId) return;
+    
+    const selectedOrg = organizations.find(org => org.OrganizationId === orgId);
+    if (selectedOrg) {
+      setOrganizationId(selectedOrg.OrganizationId);
+      setOrganizationName(selectedOrg.OrganizationName || `Organization ${selectedOrg.OrganizationId}`);
+      setApiKey(selectedOrg.ApiKey);
+      // Reset form when organization changes
+      resetForm();
+      setCategories([]);
+      setProducts([]);
+      setFilteredProducts([]);
+    }
   };
 
   const totalAmount = cart.reduce((sum, item) => sum + item.total, 0);
@@ -569,391 +731,434 @@ export default function SingleSalesEntry() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity>
-          <Ionicons name="arrow-back" size={24} color="#333" />
-        </TouchableOpacity>
-        <ThemedText style={styles.headerTitle}>Single Sales Entry</ThemedText>
-        <TouchableOpacity style={styles.saveTopBtn} onPress={handleSaveSale}>
-          <ThemedText style={styles.saveTopText}>Save</ThemedText>
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView contentContainerStyle={styles.scrollBody}>
-        {/* Date Section */}
-        <View style={styles.sectionCard}>
-          <ThemedText style={styles.label}>Date *</ThemedText>
-          <View style={styles.inputRow}>
-            <TextInput
-              style={[styles.input, { flex: 1 }]}
-              value={date}
-              editable={false}
-            />
-            <Ionicons
-              name="calendar"
-              size={20}
-              color="#666"
-              style={styles.iconInside}
-            />
-          </View>
-          <ThemedText style={styles.noteText}>
-            Note: Select category and product from dropdowns. Enter quantity to
-            calculate totals.
-          </ThemedText>
-        </View>
-
-        {/* Product Selection Area */}
-        <View style={styles.sectionCard}>
-          <View style={styles.cardHeader}>
-            <Ionicons name="cart" size={18} color="#28A745" />
-            <ThemedText style={styles.cardTitle}>Product Selection</ThemedText>
-          </View>
-
-          {/* Category Dropdown */}
-          <ThemedText style={styles.label}>Category *</ThemedText>
-          <View style={styles.pickerContainer}>
-            <Picker
-              selectedValue={selectedCategory}
-              onValueChange={(itemValue) => {
-                setSelectedCategory(itemValue);
-              }}
-            >
-              <Picker.Item label="-- Select Category --" value={null} />
-              {categories.map((cat, index) => (
-                <Picker.Item key={index} label={cat} value={cat} />
-              ))}
-            </Picker>
-          </View>
-          {categories.length === 0 && !loading && (
-            <ThemedText style={styles.errorText}>
-              No categories available. Please check API connection.
-            </ThemedText>
-          )}
-
-          {/* Product Dropdown */}
-          {selectedCategory && (
-            <>
-              <ThemedText style={styles.label}>Product *</ThemedText>
-              <View style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={selectedProduct?.ProductId}
-                  onValueChange={(itemValue) => {
-                    const product = filteredProducts.find(
-                      (p) => p.ProductId === itemValue,
-                    );
-                    setSelectedProduct(product);
-                    if (product) {
-                      setSalePrice(
-                        String(product.SalesValue || product.UnitPrice || 0),
-                      );
-                    }
-                    setQuantity("");
-                  }}
-                  enabled={filteredProducts.length > 0}
-                >
-                  <Picker.Item label="-- Select Product --" value={null} />
-                  {filteredProducts.map((prod) => (
-                    <Picker.Item
-                      key={prod.ProductId}
-                      label={`${prod.ProductName}`}
-                      value={prod.ProductId}
-                    />
-                  ))}
-                </Picker>
-              </View>
-              {filteredProducts.length === 0 && (
-                <ThemedText style={styles.errorText}>
-                  No products found in this category
-                </ThemedText>
-              )}
-            </>
-          )}
-
-          {/* Product Details */}
-          {selectedProduct && (
-            <>
-              <View style={styles.row}>
-                <View style={{ flex: 1, marginRight: 10 }}>
-                  <ThemedText style={styles.label}>Current Stock</ThemedText>
-                  <TextInput
-                    style={[styles.input, styles.disabledInput]}
-                    value={String(selectedProduct.CurrentStock || 0)}
-                    editable={false}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <ThemedText style={styles.label}>Quantity *</ThemedText>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Enter quantity"
-                    keyboardType="numeric"
-                    value={quantity}
-                    onChangeText={setQuantity}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.row}>
-                <View style={{ flex: 1, marginRight: 10 }}>
-                  <ThemedText style={styles.label}>Buy Price</ThemedText>
-                  <TextInput
-                    style={[styles.input, styles.disabledInput]}
-                    value={String(selectedProduct.UnitPrice || 0)}
-                    editable={false}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <ThemedText style={styles.label}>Sale Price *</ThemedText>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Enter sale price"
-                    keyboardType="numeric"
-                    value={salePrice}
-                    onChangeText={setSalePrice}
-                  />
-                </View>
-              </View>
-
-              {quantity && salePrice && (
-                <View style={styles.row}>
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <ThemedText style={styles.label}>Total</ThemedText>
-                    <TextInput
-                      style={[styles.input, styles.disabledInput]}
-                      value={(
-                        parseFloat(quantity) * parseFloat(salePrice)
-                      ).toFixed(2)}
-                      editable={false}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <ThemedText style={styles.label}>Profit</ThemedText>
-                    {loadingProfit === selectedProduct.ProductId ? (
-                      <ActivityIndicator
-                        size="small"
-                        color="#28A745"
-                        style={{ marginTop: 10 }}
-                      />
-                    ) : (
-                      <TextInput
-                        style={[
-                          styles.input,
-                          styles.disabledInput,
-                          styles.profitInput,
-                        ]}
-                        value={(
-                          parseFloat(quantity) * parseFloat(salePrice) -
-                          parseFloat(quantity) *
-                            (selectedProduct.UnitPrice || 0)
-                        ).toFixed(2)}
-                        editable={false}
-                      />
-                    )}
-                  </View>
-                </View>
-              )}
-
-              <TouchableOpacity
-                style={styles.addToCartBtn}
-                onPress={handleAddToCart}
-                disabled={loadingProfit !== null}
-              >
-                <Ionicons name="add-circle" size={20} color="#fff" />
-                <ThemedText style={styles.addToCartText}>
-                  Add to Cart
-                </ThemedText>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={{ flex: 1 }}>
+            <View style={styles.header}>
+              <TouchableOpacity>
+                <Ionicons name="arrow-back" size={24} color="#333" />
               </TouchableOpacity>
-            </>
-          )}
-        </View>
-
-        {/* Cart Items */}
-        {cart.length > 0 && (
-          <View style={styles.sectionCard}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="cart" size={18} color="#28A745" />
-              <ThemedText style={styles.cardTitle}>
-                Cart Items ({cart.length})
-              </ThemedText>
+              <ThemedText style={styles.headerTitle}>Single Sales Entry</ThemedText>
+              <TouchableOpacity style={styles.saveTopBtn} onPress={handleSaveSale}>
+                <ThemedText style={styles.saveTopText}>Save</ThemedText>
+              </TouchableOpacity>
             </View>
-            {cart.map((item, index) => (
-              <View key={index} style={styles.cartItem}>
-                <View style={styles.cartItemInfo}>
-                  <ThemedText style={styles.cartItemName}>
-                    {item.productName}
-                  </ThemedText>
-                  <ThemedText style={styles.cartItemDetails}>
-                    Qty: {item.quantity} × ৳{item.salePrice.toFixed(2)} = ৳
-                    {item.total.toFixed(2)}
-                  </ThemedText>
-                  <ThemedText
-                    style={[
-                      styles.cartItemProfit,
-                      item.profitPercentage >= 0
-                        ? styles.profitPositive
-                        : styles.profitNegative,
-                    ]}
+
+            <ScrollView 
+              ref={scrollViewRef}
+              contentContainerStyle={styles.scrollBody}
+              showsVerticalScrollIndicator={true}
+              keyboardShouldPersistTaps="handled"
+            >
+              {/* Organization Selector */}
+              {organizations.length > 0 && (
+                <View style={styles.sectionCard}>
+                  <View style={styles.cardHeader}>
+                    <Ionicons name="business" size={18} color="#28A745" />
+                    <ThemedText style={styles.cardTitle}>Organization</ThemedText>
+                  </View>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={organizationId}
+                      onValueChange={handleOrgChange}
+                      style={styles.picker}
+                    >
+                      {organizations.map((org) => (
+                        <Picker.Item
+                          key={org.OrganizationId}
+                          label={org.OrganizationName || `Organization ${org.OrganizationId}`}
+                          value={org.OrganizationId}
+                        />
+                      ))}
+                    </Picker>
+                  </View>
+                  {organizationName ? (
+                    <ThemedText style={styles.selectedOrgText}>
+                      Selected: {organizationName}
+                    </ThemedText>
+                  ) : null}
+                </View>
+              )}
+
+              {/* Date Section */}
+              <View style={styles.sectionCard}>
+                <ThemedText style={styles.label}>Date *</ThemedText>
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    value={date}
+                    editable={false}
+                  />
+                  <Ionicons
+                    name="calendar"
+                    size={20}
+                    color="#666"
+                    style={styles.iconInside}
+                  />
+                </View>
+                <ThemedText style={styles.noteText}>
+                  Note: Select product to auto-fill category. Or select category to filter products.
+                </ThemedText>
+              </View>
+
+              {/* Product Selection Area */}
+              <View style={styles.sectionCard}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="cart" size={18} color="#28A745" />
+                  <ThemedText style={styles.cardTitle}>Product Selection</ThemedText>
+                </View>
+
+                {/* Product Dropdown (Primary) */}
+<ThemedText style={styles.label}>Product *</ThemedText>
+<View style={styles.pickerContainer}>
+  <Picker
+    selectedValue={selectedProductId}
+    onValueChange={(itemValue) => {
+      console.log("Product selected value:", itemValue);
+      // Immediately update the selectedProductId
+      setSelectedProductId(itemValue);
+      // Also immediately find and set the product
+      if (itemValue && itemValue !== null) {
+        const productList = filteredProducts.length > 0 ? filteredProducts : products;
+        const product = productList.find((p) => p.ProductId === itemValue);
+        if (product) {
+          setSelectedProduct(product);
+          setSalePrice(String(product.SalesValue || product.UnitPrice || 0));
+          if (product.Category) {
+            setSelectedCategory(product.Category);
+          }
+        }
+      }
+    }}
+  >
+    <Picker.Item label="-- Select Product --" value={null} />
+    {(filteredProducts.length > 0 ? filteredProducts : products).map((prod) => (
+      <Picker.Item
+        key={prod.ProductId}
+        label={`${prod.ProductName} (Stock: ${prod.CurrentStock || 0})`}
+        value={prod.ProductId}
+      />
+    ))}
+  </Picker>
+</View>
+
+                {/* Category Dropdown (Secondary) */}
+                <ThemedText style={styles.label}>Category</ThemedText>
+                <View style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={selectedCategory}
+                    onValueChange={(itemValue) => {
+                      setSelectedCategory(itemValue);
+                      setSelectedProductId(null);
+                      setSelectedProduct(null);
+                      setQuantity("");
+                      setSalePrice("");
+                    }}
                   >
-                    Profit: ৳{item.profit.toFixed(2)} (
-                    {item.profitPercentage.toFixed(1)}%)
+                    <Picker.Item label="-- Select Category --" value={null} />
+                    {categories.map((cat, index) => (
+                      <Picker.Item key={index} label={cat} value={cat} />
+                    ))}
+                  </Picker>
+                </View>
+                {categories.length === 0 && !loading && (
+                  <ThemedText style={styles.errorText}>
+                    No categories available. Please check API connection.
+                  </ThemedText>
+                )}
+
+                {/* Product Details (when product selected) */}
+                {selectedProduct && (
+                  <>
+                    <View style={styles.row}>
+                      <View style={{ flex: 1, marginRight: 10 }}>
+                        <ThemedText style={styles.label}>Current Stock</ThemedText>
+                        <TextInput
+                          style={[styles.input, styles.disabledInput]}
+                          value={String(selectedProduct.CurrentStock || 0)}
+                          editable={false}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <ThemedText style={styles.label}>Quantity *</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Enter quantity"
+                          keyboardType="numeric"
+                          value={quantity}
+                          onChangeText={setQuantity}
+                        />
+                      </View>
+                    </View>
+
+                    <View style={styles.row}>
+                      <View style={{ flex: 1, marginRight: 10 }}>
+                        <ThemedText style={styles.label}>Buy Price</ThemedText>
+                        <TextInput
+                          style={[styles.input, styles.disabledInput]}
+                          value={String(selectedProduct.UnitPrice || 0)}
+                          editable={false}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <ThemedText style={styles.label}>Sale Price *</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Enter sale price"
+                          keyboardType="numeric"
+                          value={salePrice}
+                          onChangeText={setSalePrice}
+                        />
+                      </View>
+                    </View>
+
+                    {quantity && salePrice && (
+                      <View style={styles.row}>
+                        <View style={{ flex: 1, marginRight: 10 }}>
+                          <ThemedText style={styles.label}>Total</ThemedText>
+                          <TextInput
+                            style={[styles.input, styles.disabledInput]}
+                            value={(
+                              parseFloat(quantity) * parseFloat(salePrice)
+                            ).toFixed(2)}
+                            editable={false}
+                          />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <ThemedText style={styles.label}>Profit</ThemedText>
+                          {loadingProfit === selectedProduct.ProductId ? (
+                            <ActivityIndicator
+                              size="small"
+                              color="#28A745"
+                              style={{ marginTop: 10 }}
+                            />
+                          ) : (
+                            <TextInput
+                              style={[
+                                styles.input,
+                                styles.disabledInput,
+                                styles.profitInput,
+                              ]}
+                              value={(
+                                parseFloat(quantity) * parseFloat(salePrice) -
+                                parseFloat(quantity) *
+                                  (selectedProduct.UnitPrice || 0)
+                              ).toFixed(2)}
+                              editable={false}
+                            />
+                          )}
+                        </View>
+                      </View>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.addToCartBtn}
+                      onPress={handleAddToCart}
+                      disabled={loadingProfit !== null}
+                    >
+                      <Ionicons name="add-circle" size={20} color="#fff" />
+                      <ThemedText style={styles.addToCartText}>
+                        Add to Cart
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+
+              {/* Cart Items */}
+              {cart.length > 0 && (
+                <View style={styles.sectionCard}>
+                  <View style={styles.cardHeader}>
+                    <Ionicons name="cart" size={18} color="#28A745" />
+                    <ThemedText style={styles.cardTitle}>
+                      Cart Items ({cart.length})
+                    </ThemedText>
+                  </View>
+                  {cart.map((item, index) => (
+                    <View key={index} style={styles.cartItem}>
+                      <View style={styles.cartItemInfo}>
+                        <ThemedText style={styles.cartItemName}>
+                          {item.productName}
+                        </ThemedText>
+                        <ThemedText style={styles.cartItemDetails}>
+                          Qty: {item.quantity} × ৳{item.salePrice.toFixed(2)} = ৳
+                          {item.total.toFixed(2)}
+                        </ThemedText>
+                        <ThemedText
+                          style={[
+                            styles.cartItemProfit,
+                            item.profitPercentage >= 0
+                              ? styles.profitPositive
+                              : styles.profitNegative,
+                          ]}
+                        >
+                          Profit: ৳{item.profit.toFixed(2)} (
+                          {item.profitPercentage.toFixed(1)}%)
+                        </ThemedText>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => setCart(cart.filter((_, i) => i !== index))}
+                      >
+                        <Ionicons name="trash-outline" size={22} color="#DC3545" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <View style={styles.cartTotal}>
+                    <ThemedText style={styles.cartTotalLabel}>Cart Total:</ThemedText>
+                    <ThemedText style={styles.cartTotalValue}>
+                      ৳{totalAmount.toFixed(2)}
+                    </ThemedText>
+                  </View>
+                </View>
+              )}
+
+              {/* Payment Information */}
+              <View style={styles.sectionCard}>
+                <View style={styles.cardHeader}>
+                  <FontAwesome5 name="credit-card" size={16} color="#28A745" />
+                  <ThemedText style={styles.cardTitle}>
+                    Payment Information
                   </ThemedText>
                 </View>
+
+                <ThemedText style={styles.label}>Payment Amount (৳) *</ThemedText>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0"
+                  keyboardType="numeric"
+                  value={paymentAmount}
+                  onChangeText={setPaymentAmount}
+                />
+
+                <ThemedText style={styles.label}>Payment Method</ThemedText>
+                <View style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={paymentMethod}
+                    onValueChange={(item) => setPaymentMethod(item)}
+                  >
+                    <Picker.Item label="Cash" value="Cash" />
+                    <Picker.Item label="Bank" value="Bank" />
+                    <Picker.Item label="Mobile Banking" value="Mobile Banking" />
+                    <Picker.Item label="Check" value="Check" />
+                    <Picker.Item label="Card" value="Card" />
+                  </Picker>
+                </View>
+
+                <ThemedText style={styles.label}>Reference (Optional)</ThemedText>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Check/Transaction No"
+                  value={reference}
+                  onChangeText={setReference}
+                />
+
+                <ThemedText style={styles.label}>Due Amount</ThemedText>
+                <TextInput
+                  style={[
+                    styles.input,
+                    styles.disabledInput,
+                    {
+                      color: dueAmount > 0 ? "#DC3545" : "#28A745",
+                      fontWeight: "bold",
+                    },
+                  ]}
+                  value={`${dueAmount.toFixed(2)} ৳`}
+                  editable={false}
+                />
+
+                <View style={styles.summaryTable}>
+                  <SummaryRow
+                    label="Total Sale:"
+                    value={`৳${totalAmount.toFixed(2)}`}
+                    color="#28A745"
+                  />
+                  <SummaryRow
+                    label="Payment:"
+                    value={`৳${totalPaid.toFixed(2)}`}
+                    color="#28A745"
+                  />
+                  <SummaryRow
+                    label="Due:"
+                    value={`৳${dueAmount.toFixed(2)}`}
+                    color={dueAmount > 0 ? "#DC3545" : "#28A745"}
+                  />
+                </View>
+              </View>
+
+              {/* Customer Information */}
+              <View style={styles.sectionCard}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="person" size={18} color="#28A745" />
+                  <ThemedText style={styles.cardTitle}>
+                    Customer Information
+                  </ThemedText>
+                </View>
+
+                <LabelInput
+                  label="Customer Name"
+                  icon="person-outline"
+                  value={customerName}
+                  onChangeText={setCustomerName}
+                  placeholder="Walk-in Customer"
+                />
+                <LabelInput
+                  label="Phone Number"
+                  icon="call-outline"
+                  keyboardType="phone-pad"
+                  value={customerPhone}
+                  onChangeText={setCustomerPhone}
+                  placeholder="Optional"
+                />
+                <LabelInput
+                  label="Email"
+                  icon="mail-outline"
+                  keyboardType="email-address"
+                  value={customerEmail}
+                  onChangeText={setCustomerEmail}
+                  placeholder="Optional"
+                />
+                <LabelInput
+                  label="Address"
+                  icon="location-outline"
+                  multiline
+                  value={customerAddress}
+                  onChangeText={setCustomerAddress}
+                  placeholder="Optional"
+                />
+              </View>
+
+              {/* Action Buttons */}
+              <View style={styles.footerAction}>
                 <TouchableOpacity
-                  onPress={() => setCart(cart.filter((_, i) => i !== index))}
+                  style={[styles.actionBtn, { backgroundColor: "#6C757D" }]}
+                  onPress={resetForm}
                 >
-                  <Ionicons name="trash-outline" size={22} color="#DC3545" />
+                  <ThemedText style={styles.btnText}>Clear All</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.actionBtn,
+                    { backgroundColor: "#17A2B8", flex: 1.5 },
+                  ]}
+                  onPress={handleSaveAndPrint}
+                >
+                  <ThemedText style={styles.btnText}>Save & Print</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: "#28A745" }]}
+                  onPress={handleSaveSale}
+                >
+                  <ThemedText style={styles.btnText}>Save</ThemedText>
                 </TouchableOpacity>
               </View>
-            ))}
-            <View style={styles.cartTotal}>
-              <ThemedText style={styles.cartTotalLabel}>Cart Total:</ThemedText>
-              <ThemedText style={styles.cartTotalValue}>
-                ৳{totalAmount.toFixed(2)}
-              </ThemedText>
-            </View>
+            </ScrollView>
           </View>
-        )}
-
-        {/* Payment Information */}
-        <View style={styles.sectionCard}>
-          <View style={styles.cardHeader}>
-            <FontAwesome5 name="credit-card" size={16} color="#28A745" />
-            <ThemedText style={styles.cardTitle}>
-              Payment Information
-            </ThemedText>
-          </View>
-
-          <ThemedText style={styles.label}>Payment Amount (৳) *</ThemedText>
-          <TextInput
-            style={styles.input}
-            placeholder="0"
-            keyboardType="numeric"
-            value={paymentAmount}
-            onChangeText={setPaymentAmount}
-          />
-
-          <ThemedText style={styles.label}>Payment Method</ThemedText>
-          <View style={styles.pickerContainer}>
-            <Picker
-              selectedValue={paymentMethod}
-              onValueChange={(item) => setPaymentMethod(item)}
-            >
-              <Picker.Item label="Cash" value="Cash" />
-              <Picker.Item label="Bank" value="Bank" />
-              <Picker.Item label="Mobile Banking" value="Mobile Banking" />
-              <Picker.Item label="Check" value="Check" />
-              <Picker.Item label="Card" value="Card" />
-            </Picker>
-          </View>
-
-          <ThemedText style={styles.label}>Reference (Optional)</ThemedText>
-          <TextInput
-            style={styles.input}
-            placeholder="Check/Transaction No"
-            value={reference}
-            onChangeText={setReference}
-          />
-
-          <ThemedText style={styles.label}>Due Amount</ThemedText>
-          <TextInput
-            style={[
-              styles.input,
-              styles.disabledInput,
-              {
-                color: dueAmount > 0 ? "#DC3545" : "#28A745",
-                fontWeight: "bold",
-              },
-            ]}
-            value={`${dueAmount.toFixed(2)} ৳`}
-            editable={false}
-          />
-
-          <View style={styles.summaryTable}>
-            <SummaryRow
-              label="Total Sale:"
-              value={`৳${totalAmount.toFixed(2)}`}
-              color="#28A745"
-            />
-            <SummaryRow
-              label="Payment:"
-              value={`৳${totalPaid.toFixed(2)}`}
-              color="#28A745"
-            />
-            <SummaryRow
-              label="Due:"
-              value={`৳${dueAmount.toFixed(2)}`}
-              color={dueAmount > 0 ? "#DC3545" : "#28A745"}
-            />
-          </View>
-        </View>
-
-        {/* Customer Information */}
-        <View style={styles.sectionCard}>
-          <View style={styles.cardHeader}>
-            <Ionicons name="person" size={18} color="#28A745" />
-            <ThemedText style={styles.cardTitle}>
-              Customer Information
-            </ThemedText>
-          </View>
-
-          <LabelInput
-            label="Customer Name"
-            icon="person-outline"
-            value={customerName}
-            onChangeText={setCustomerName}
-            placeholder="Walk-in Customer"
-          />
-          <LabelInput
-            label="Phone Number"
-            icon="call-outline"
-            keyboardType="phone-pad"
-            value={customerPhone}
-            onChangeText={setCustomerPhone}
-            placeholder="Optional"
-          />
-          <LabelInput
-            label="Email"
-            icon="mail-outline"
-            keyboardType="email-address"
-            value={customerEmail}
-            onChangeText={setCustomerEmail}
-            placeholder="Optional"
-          />
-          <LabelInput
-            label="Address"
-            icon="location-outline"
-            multiline
-            value={customerAddress}
-            onChangeText={setCustomerAddress}
-            placeholder="Optional"
-          />
-        </View>
-
-        {/* Action Buttons */}
-        <View style={styles.footerAction}>
-          <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: "#6C757D" }]}
-            onPress={resetForm}
-          >
-            <ThemedText style={styles.btnText}>Clear All</ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.actionBtn,
-              { backgroundColor: "#17A2B8", flex: 1.5 },
-            ]}
-            onPress={handleSaveAndPrint}
-          >
-            <ThemedText style={styles.btnText}>Save & Print</ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: "#28A745" }]}
-            onPress={handleSaveSale}
-          >
-            <ThemedText style={styles.btnText}>Save</ThemedText>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -988,6 +1193,7 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: "white",
     elevation: 2,
+    zIndex: 1,
   },
   headerTitle: { fontSize: 18, fontWeight: "bold", color: "#333" },
   saveTopBtn: {
@@ -1049,6 +1255,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 12,
     backgroundColor: "#FAFAFA",
+  },
+  picker: {
+    height: 50,
+    width: "100%",
   },
 
   row: { flexDirection: "row", marginBottom: 12, gap: 10 },
@@ -1121,4 +1331,11 @@ const styles = StyleSheet.create({
   cartTotalLabel: { fontSize: 16, fontWeight: "bold", color: "#333" },
   cartTotalValue: { fontSize: 16, fontWeight: "bold", color: "#28A745" },
   errorText: { fontSize: 12, color: "red", marginTop: 4, textAlign: "center" },
+  selectedOrgText: {
+    fontSize: 12,
+    color: "#28A745",
+    marginTop: 8,
+    textAlign: "center",
+    fontWeight: "bold",
+  },
 });

@@ -1,5 +1,6 @@
 import { ThemedText } from "@/components/themed-text";
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -12,17 +13,36 @@ import {
   View,
   Modal,
 } from "react-native";
+import { Picker } from "@react-native-picker/picker";
 
 // API Configuration
-const API_KEY = "3A734AC6-A521-4192-984D-08D082B83456";
 const BASE_URL = "http://devmystock.byteheart.com";
 
+interface Organization {
+  OrganizationId: number;
+  ApiKey: string;
+  OrganizationName?: string;
+}
+
+interface UserSession {
+  Success: boolean;
+  Message: string;
+  Token: string | null;
+  UserId: string;
+  UserName: string;
+  RoleName: string;
+  OrganizationId: number;
+  OrganizationName: string;
+  ApiKey: string;
+  Organizations: Organization[];
+}
+
 // Helper function for API calls with authentication
-const apiRequest = async (endpoint: string, options: RequestInit = {}) => {
+const apiRequest = async (endpoint: string, apiKey: string, options: RequestInit = {}) => {
   const response = await fetch(`${BASE_URL}${endpoint}`, {
     ...options,
     headers: {
-      Authorization: `Bearer ${API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       ...options.headers,
     },
@@ -41,10 +61,11 @@ const calculateFIFOProfit = async (
   organizationId: number | null,
   productId: number,
   quantity: number,
-  salesPrice: number
+  salesPrice: number,
+  apiKey: string
 ) => {
   try {
-    const data = await apiRequest("/Stock/CalculateFIFOProfit", {
+    const data = await apiRequest("/Stock/CalculateFIFOProfit", apiKey, {
       method: "POST",
       body: JSON.stringify({
         organizationId: organizationId,
@@ -90,6 +111,9 @@ export default function BulkSalesEntryScreen() {
   const [productRows, setProductRows] = useState<ProductRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [apiKey, setApiKey] = useState<string>("");
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizationName, setOrganizationName] = useState<string>("");
   const [searchText, setSearchText] = useState("");
   
   // Customer Info State
@@ -117,14 +141,97 @@ export default function BulkSalesEntryScreen() {
   const [modalMessage, setModalMessage] = useState("");
   const [modalTitle, setModalTitle] = useState("");
   const [modalType, setModalType] = useState<"success" | "error" | "warning" | "info">("info");
-  
-  // Organization Info
-  const [organizationName, setOrganizationName] = useState("BH Pharma Distribution");
 
-  // Load products on mount
+  // Load user session on mount
   useEffect(() => {
-    fetchAllProducts();
+    loadUserSession();
   }, []);
+
+  // Fetch products when organization changes
+  useEffect(() => {
+    if (organizationId && apiKey) {
+      fetchAllProducts();
+    }
+  }, [organizationId, apiKey]);
+
+  const loadUserSession = async () => {
+    try {
+      const session = await AsyncStorage.getItem("user_session");
+      if (!session) {
+        Alert.alert("Error", "Session not found. Please login again.");
+        setLoading(false);
+        return;
+      }
+
+      const userData: UserSession = JSON.parse(session);
+      
+      if (userData.Organizations && userData.Organizations.length > 0) {
+        try {
+          const headers = {
+            Authorization: `Bearer ${userData.ApiKey}`,
+            "Content-Type": "application/json",
+          };
+          const orgUrl = `http://devmystock.byteheart.com/Dashboard/GetAllOrganization?userId=${userData.UserId}`;
+          const orgResponse = await fetch(orgUrl, { headers });
+          const orgData = await orgResponse.json();
+          
+          const orgNameMap = new Map();
+          if (orgData && orgData.success && Array.isArray(orgData.data)) {
+            orgData.data.forEach((org: any) => {
+              const id = org.organizationId || org.id;
+              const name = org.organizationName || org.name;
+              if (id && name) {
+                orgNameMap.set(id, name);
+              }
+            });
+          }
+          
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: orgNameMap.get(org.OrganizationId) || `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName || userData.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          } else {
+            const firstOrg = orgsWithNames[0];
+            setOrganizationId(firstOrg.OrganizationId);
+            setOrganizationName(firstOrg.OrganizationName || `Organization ${firstOrg.OrganizationId}`);
+            setApiKey(firstOrg.ApiKey);
+          }
+        } catch (error) {
+          console.error("Error fetching organization names:", error);
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          }
+        }
+      } else {
+        Alert.alert("Error", "No organizations found for this user");
+      }
+    } catch (error) {
+      console.error("Error loading session:", error);
+      Alert.alert("Error", "Failed to load user session");
+    }
+  };
 
   const fetchAllProducts = async () => {
     try {
@@ -135,7 +242,7 @@ export default function BulkSalesEntryScreen() {
       }
 
       console.log("Fetching products from:", url);
-      const data = await apiRequest(url);
+      const data = await apiRequest(url, apiKey);
       console.log("Products loaded:", data?.length || 0);
 
       let productsList = [];
@@ -182,11 +289,32 @@ export default function BulkSalesEntryScreen() {
     }
   };
 
+  const handleOrgChange = (orgId: number) => {
+    if (orgId === 0) return;
+    
+    const selectedOrg = organizations.find(org => org.OrganizationId === orgId);
+    if (selectedOrg) {
+      setOrganizationId(selectedOrg.OrganizationId);
+      setOrganizationName(selectedOrg.OrganizationName || `Organization ${selectedOrg.OrganizationId}`);
+      setApiKey(selectedOrg.ApiKey);
+      // Reset all data
+      setProductRows([]);
+      setCustomerName("");
+      setPhoneNumber("");
+      setEmail("");
+      setAddress("");
+      setPaymentAmount("0");
+      setPaymentMethod("Cash");
+      setPaymentReference("");
+      setSearchText("");
+    }
+  };
+
   const loadCustomerByPhoneNumber = async (phone: string) => {
     if (!phone || phone.length < 6) return;
     
     try {
-      const response = await apiRequest(`/Stock/GetByPhoneNumber?phoneNumber=${phone}&orgId=${organizationId}`);
+      const response = await apiRequest(`/Stock/GetByPhoneNumber?phoneNumber=${phone}&orgId=${organizationId}`, apiKey);
       
       if (response.success && response.isData && response.customer) {
         setCustomerName(response.customer.CustomerName || "");
@@ -212,7 +340,8 @@ export default function BulkSalesEntryScreen() {
       organizationId,
       row.productId,
       quantity,
-      salesPrice
+      salesPrice,
+      apiKey
     );
 
     const totalAmount = salesPrice * quantity;
@@ -338,7 +467,6 @@ export default function BulkSalesEntryScreen() {
     const payment = parseFloat(paymentAmount) || 0;
     const due = totalSaleAmount - payment;
 
-    // Validate customer data for due payments
     if (due > 0) {
       if (!phoneNumber) {
         Alert.alert("Validation Error", "Phone number is required for due payment transactions");
@@ -350,13 +478,11 @@ export default function BulkSalesEntryScreen() {
       }
     }
 
-    // Validate payment method if payment exists
     if (payment > 0 && !paymentMethod) {
       Alert.alert("Validation Error", "Please select a payment method");
       return;
     }
 
-    // Build sale items
     for (const row of productRows) {
       const qty = parseFloat(row.qty) || 0;
       if (qty > 0) {
@@ -384,7 +510,6 @@ export default function BulkSalesEntryScreen() {
       return;
     }
 
-    // Prepare sale data
     const saleData: any = {
       transactionDate: new Date().toISOString(),
       dailyExpense: parseFloat(dailyExpense) || 0,
@@ -404,7 +529,7 @@ export default function BulkSalesEntryScreen() {
     setLoading(true);
 
     try {
-      const response = await apiRequest("/Stock/SaveAPI", {
+      const response = await apiRequest("/Stock/SaveAPI", apiKey, {
         method: "POST",
         body: JSON.stringify(saleData),
       });
@@ -429,7 +554,6 @@ export default function BulkSalesEntryScreen() {
   };
 
   const refreshAll = () => {
-    // Reset all quantities and payments
     setProductRows(prevRows =>
       prevRows.map(row => ({
         ...row,
@@ -448,22 +572,6 @@ export default function BulkSalesEntryScreen() {
     setPaymentReference("");
     setDailyExpense("0");
     setSearchText("");
-  };
-
-  const showModal = (title: string, message: string, type: "success" | "error" | "warning" | "info") => {
-    setModalTitle(title);
-    setModalMessage(message);
-    setModalType(type);
-    setModalVisible(true);
-  };
-
-  const getModalColors = () => {
-    switch (modalType) {
-      case "success": return { header: "#28a745", body: "#d4edda", text: "#155724" };
-      case "error": return { header: "#dc3545", body: "#f8d7da", text: "#721c24" };
-      case "warning": return { header: "#ffc107", body: "#fff3cd", text: "#856404" };
-      default: return { header: "#17a2b8", body: "#d1ecf1", text: "#0c5460" };
-    }
   };
 
   const getStockColor = (stock: number) => {
@@ -493,20 +601,18 @@ export default function BulkSalesEntryScreen() {
         onRequestClose={() => setModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: getModalColors().body }]}>
-            <View style={[styles.modalHeader, { backgroundColor: getModalColors().header }]}>
+          <View style={[styles.modalContent, { backgroundColor: "#fff" }]}>
+            <View style={[styles.modalHeader, { backgroundColor: "#28a745" }]}>
               <ThemedText style={styles.modalHeaderText}>{modalTitle}</ThemedText>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#fff" />
               </TouchableOpacity>
             </View>
             <View style={styles.modalBody}>
-              <ThemedText style={[styles.modalMessage, { color: getModalColors().text }]}>
-                {modalMessage}
-              </ThemedText>
+              <ThemedText style={styles.modalMessage}>{modalMessage}</ThemedText>
             </View>
             <TouchableOpacity
-              style={[styles.modalButton, { backgroundColor: getModalColors().header }]}
+              style={[styles.modalButton, { backgroundColor: "#28a745" }]}
               onPress={() => setModalVisible(false)}
             >
               <ThemedText style={styles.modalButtonText}>OK</ThemedText>
@@ -530,6 +636,38 @@ export default function BulkSalesEntryScreen() {
         <ThemedText style={styles.subTitle}>
           Total Products: {productRows.length} | Items Sold: {totalItems}
         </ThemedText>
+
+        {/* Organization Selector */}
+        {organizations.length > 0 && (
+          <View style={styles.card}>
+            <View style={styles.row}>
+              <Ionicons name="business" size={18} color="#28a745" />
+              <ThemedText style={[styles.sectionTitle, { marginBottom: 0, marginLeft: 8 }]}>Organization</ThemedText>
+            </View>
+            <View style={styles.pickerWrapper}>
+              <Picker
+                mode="dropdown"
+                style={styles.pickerStyle}
+                selectedValue={organizationId || 0}
+                onValueChange={handleOrgChange}
+              >
+                <Picker.Item label="-- Select Organization --" value={0} />
+                {organizations.map((org) => (
+                  <Picker.Item
+                    key={org.OrganizationId}
+                    label={org.OrganizationName || `Organization ${org.OrganizationId}`}
+                    value={org.OrganizationId}
+                  />
+                ))}
+              </Picker>
+            </View>
+            {organizationName ? (
+              <ThemedText style={styles.selectedOrgText}>
+                Selected: {organizationName}
+              </ThemedText>
+            ) : null}
+          </View>
+        )}
 
         {/* Date & Search */}
         <View style={styles.card}>
@@ -629,23 +767,18 @@ export default function BulkSalesEntryScreen() {
             <View style={styles.inputGroup}>
               <ThemedText style={styles.label}>Payment Method</ThemedText>
               <View style={styles.pickerWrapper}>
-                {/* Using a simple picker alternative for React Native */}
-                <TouchableOpacity style={styles.methodSelector} onPress={() => {
-                  Alert.alert(
-                    "Payment Method",
-                    "Select payment method",
-                    [
-                      { text: "Cash", onPress: () => setPaymentMethod("Cash") },
-                      { text: "Bank Transfer", onPress: () => setPaymentMethod("Bank") },
-                      { text: "Mobile Banking", onPress: () => setPaymentMethod("Mobile Banking") },
-                      { text: "Check", onPress: () => setPaymentMethod("Check") },
-                      { text: "Card", onPress: () => setPaymentMethod("Card") },
-                    ]
-                  );
-                }}>
-                  <ThemedText style={styles.methodSelectorText}>{paymentMethod}</ThemedText>
-                  <Ionicons name="chevron-down" size={18} color="#666" />
-                </TouchableOpacity>
+                <Picker
+                  mode="dropdown"
+                  style={styles.pickerStyle}
+                  selectedValue={paymentMethod}
+                  onValueChange={(itemValue) => setPaymentMethod(itemValue)}
+                >
+                  <Picker.Item label="Cash" value="Cash" />
+                  <Picker.Item label="Bank Transfer" value="Bank" />
+                  <Picker.Item label="Mobile Banking" value="Mobile Banking" />
+                  <Picker.Item label="Check" value="Check" />
+                  <Picker.Item label="Card" value="Card" />
+                </Picker>
               </View>
             </View>
             <View style={styles.inputGroup}>
@@ -779,10 +912,6 @@ export default function BulkSalesEntryScreen() {
             <ThemedText style={[styles.sumLabel, { color: "red" }]}>Due Amount:</ThemedText>
             <ThemedText style={{ color: "red", fontWeight: "bold" }}>৳{dueAmount.toFixed(2)}</ThemedText>
           </View>
-          <View style={styles.sumRow}>
-            <ThemedText style={styles.netProfitText}>NET PROFIT:</ThemedText>
-            <ThemedText style={styles.netProfitText}>৳{(totalProfit - (parseFloat(dailyExpense) || 0)).toFixed(2)}</ThemedText>
-          </View>
         </View>
 
         {/* Bottom Actions */}
@@ -814,7 +943,7 @@ export default function BulkSalesEntryScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f4f7f6" },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
-  topHeader: { flexDirection: "row", justifyContent: "flex-end", padding: 10, gap: 10, backgroundColor: "#fff" },
+  topHeader: { flexDirection: "row", justifyContent: "space-between", padding: 10, gap: 10, backgroundColor: "#fff" },
   scrollView: { padding: 10 },
   mainTitle: { fontSize: 20, color: "#333", marginBottom: 5, fontWeight: "bold" },
   subTitle: { fontSize: 14, color: "#666", marginBottom: 15 },
@@ -827,8 +956,7 @@ const styles = StyleSheet.create({
   inputGroup: { width: "100%" },
   row: { flexDirection: "row", alignItems: "center" },
   pickerWrapper: { borderWidth: 1, borderColor: "#ccc", borderRadius: 4, height: 45, backgroundColor: "#fff", justifyContent: "center" },
-  methodSelector: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 12, height: 45 },
-  methodSelectorText: { fontSize: 15, color: "#000" },
+  pickerStyle: { height: 45, width: "100%" },
   paymentText: { fontSize: 14, fontWeight: "bold" },
   tableContainer: { borderWidth: 1, borderColor: "#aaa", borderRadius: 4, overflow: "hidden", minWidth: "100%" },
   tableHeader: { flexDirection: "row", backgroundColor: "#d1e7dd" },
@@ -842,7 +970,6 @@ const styles = StyleSheet.create({
   sumRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 5, borderBottomWidth: 0.5, borderBottomColor: "#badbcc" },
   sumLabel: { fontSize: 14, color: "#444" },
   sumVal: { fontSize: 14, fontWeight: "600" },
-  netProfitText: { fontWeight: "bold", fontSize: 16, color: "#155724", marginTop: 8 },
   bottomBar: { flexDirection: "row", justifyContent: "space-between", gap: 8, paddingVertical: 25, paddingBottom: 40 },
   actionBtn: { flex: 1, height: 45, borderRadius: 4, justifyContent: "center", alignItems: "center", padding: 10 },
   greenBtn: { backgroundColor: "#5cb85c", height: 35, paddingHorizontal: 15, borderRadius: 4, justifyContent: "center" },
@@ -859,4 +986,5 @@ const styles = StyleSheet.create({
   modalButtonText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
   emptyRow: { padding: 40, alignItems: "center" },
   emptyText: { fontSize: 16, color: "#999" },
+  selectedOrgText: { fontSize: 12, color: "#28a745", marginTop: 8, textAlign: "center", fontWeight: "bold" },
 });

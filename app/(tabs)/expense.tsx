@@ -1,5 +1,5 @@
 import { ThemedText } from "@/components/themed-text";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import React, { useState, useEffect } from "react";
 import {
   FlatList,
@@ -15,6 +15,8 @@ import {
   Platform,
 } from "react-native";
 import DateTimePicker from '@react-native-community/datetimepicker';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Picker } from "@react-native-picker/picker";
 
 interface ExpenseData {
   Id: number;
@@ -36,7 +38,33 @@ interface SummaryData {
   OrganizationId: number;
 }
 
+interface Organization {
+  OrganizationId: number;
+  ApiKey: string;
+  OrganizationName?: string;
+}
+
+interface UserSession {
+  Success: boolean;
+  Message: string;
+  Token: string | null;
+  UserId: string;
+  UserName: string;
+  RoleName: string;
+  OrganizationId: number;
+  OrganizationName: string;
+  ApiKey: string;
+  Organizations: Organization[];
+}
+
 export default function TransactionManagementScreen() {
+  // Organization States
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [organizationName, setOrganizationName] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [orgLoading, setOrgLoading] = useState<boolean>(true);
+
   // Data and loading states
   const [allExpenses, setAllExpenses] = useState<ExpenseData[]>([]);
   const [filteredExpenses, setFilteredExpenses] = useState<ExpenseData[]>([]);
@@ -75,7 +103,170 @@ export default function TransactionManagementScreen() {
   const [formExpenseDate, setFormExpenseDate] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
 
-  const apiKey = "3A734AC6-A521-4192-984D-08D082B83456";
+  // Load user session on mount
+  useEffect(() => {
+    loadUserSession();
+  }, []);
+
+  // Fetch expenses when organization changes
+  useEffect(() => {
+    if (organizationId && apiKey) {
+      fetchExpenses();
+    }
+  }, [organizationId, apiKey]);
+
+  const loadUserSession = async () => {
+    try {
+      const session = await AsyncStorage.getItem("user_session");
+      if (!session) {
+        Alert.alert("Error", "Session not found. Please login again.");
+        setOrgLoading(false);
+        setLoading(false);
+        return;
+      }
+
+      const userData: UserSession = JSON.parse(session);
+      
+      if (userData.Organizations && userData.Organizations.length > 0) {
+        try {
+          const headers = {
+            Authorization: `Bearer ${userData.ApiKey}`,
+            "Content-Type": "application/json",
+          };
+          const orgUrl = `http://devmystock.byteheart.com/Dashboard/GetAllOrganization?userId=${userData.UserId}`;
+          const orgResponse = await fetch(orgUrl, { headers });
+          const orgData = await orgResponse.json();
+          
+          const orgNameMap = new Map();
+          if (orgData && orgData.success && Array.isArray(orgData.data)) {
+            orgData.data.forEach((org: any) => {
+              const id = org.organizationId || org.id;
+              const name = org.organizationName || org.name;
+              if (id && name) {
+                orgNameMap.set(id, name);
+              }
+            });
+          }
+          
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: orgNameMap.get(org.OrganizationId) || `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName || userData.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          } else {
+            const firstOrg = orgsWithNames[0];
+            setOrganizationId(firstOrg.OrganizationId);
+            setOrganizationName(firstOrg.OrganizationName || `Organization ${firstOrg.OrganizationId}`);
+            setApiKey(firstOrg.ApiKey);
+          }
+        } catch (error) {
+          console.error("Error fetching organization names:", error);
+          Alert.alert("Error", "Failed to load organization information");
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          }
+        }
+      } else {
+        Alert.alert("Error", "No organizations found for this user");
+        setOrgLoading(false);
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error("Error loading session:", error);
+      Alert.alert("Error", "Failed to load user session");
+      setOrgLoading(false);
+      setLoading(false);
+    } finally {
+      setOrgLoading(false);
+    }
+  };
+
+  const handleOrgChange = (orgId: number) => {
+    if (orgId === 0) return;
+    
+    const selectedOrg = organizations.find(org => org.OrganizationId === orgId);
+    if (selectedOrg) {
+      setOrganizationId(selectedOrg.OrganizationId);
+      setOrganizationName(selectedOrg.OrganizationName || `Organization ${selectedOrg.OrganizationId}`);
+      setApiKey(selectedOrg.ApiKey);
+      // Reset data when organization changes
+      setAllExpenses([]);
+      setFilteredExpenses([]);
+      setExpenseTypes([]);
+      setSummary(null);
+      resetFilters();
+    }
+  };
+
+  const fetchExpenses = async () => {
+    if (!organizationId || !apiKey) {
+      Alert.alert("Error", "Organization or API key not found");
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(
+        `http://devmystock.byteheart.com/Expense/Index?organizationId=${organizationId}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          Alert.alert("Error", "Unauthorized. Invalid API key for this organization.");
+          setLoading(false);
+          return;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log("=== Expense API Response ===");
+      console.log("Full Response:", JSON.stringify(result, null, 2));
+
+      if (result.success) {
+        setAllExpenses(result.data || []);
+        setFilteredExpenses(result.data || []);
+        setExpenseTypes(result.expenseTypes || []);
+        setSummary(result.summary || null);
+      } else {
+        Alert.alert("Error", result.message || "Failed to fetch data");
+      }
+    } catch (error: any) {
+      console.error('Error fetching data:', error);
+      Alert.alert("Error", `Failed to fetch transactions: ${error.message || "Network error"}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Get Bangladesh time
   const getBangladeshTime = (): Date => {
@@ -84,51 +275,6 @@ export default function TransactionManagementScreen() {
     const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
     return new Date(utcTime + bangladeshOffset);
   };
-
-  // Get today's date in Bangladesh timezone (start of day)
-  const getTodayBangladesh = (): Date => {
-    const bangladeshDate = getBangladeshTime();
-    bangladeshDate.setHours(0, 0, 0, 0);
-    return bangladeshDate;
-  };
-
-  // Format date to YYYY-MM-DD for API
-  const formatDateForAPI = (date: Date): string => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
-  const fetchExpenses = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch('http://devmystock.byteheart.com/Expense/Index', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        setAllExpenses(result.data || []);
-        setFilteredExpenses(result.data || []);
-        setExpenseTypes(result.expenseTypes || []);
-        setSummary(result.summary || null);
-      }
-    } catch (error) {
-      console.error('Error fetching data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchExpenses();
-  }, []);
 
   const handleRangeSelect = (range: string) => {
     setDateRange(range);
@@ -149,7 +295,6 @@ export default function TransactionManagementScreen() {
     else if (range === "30 Days") start.setDate(end.getDate() - 30);
     else if (range === "3 Months") start.setMonth(end.getMonth() - 3);
 
-    // Set time to start of day for start date
     start.setHours(0, 0, 0, 0);
 
     setStartDate(start);
@@ -164,14 +309,19 @@ export default function TransactionManagementScreen() {
     return `${year}-${month}-${day}`;
   };
 
+  const formatDateForAPI = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const handleStartDateConfirm = (selectedDate: Date) => {
     setShowStartPicker(false);
-    // Set time to start of day
     selectedDate.setHours(0, 0, 0, 0);
     setStartDate(selectedDate);
     setDateRange("Custom");
     
-    // If end date exists and is before start date, reset end date
     if (endDate && endDate < selectedDate) {
       setEndDate(null);
       Alert.alert("Info", "End date has been reset as it was before the start date");
@@ -181,13 +331,11 @@ export default function TransactionManagementScreen() {
   const handleEndDateConfirm = (selectedDate: Date) => {
     setShowEndPicker(false);
     
-    // Validate end date is not before start date
     if (startDate && selectedDate < startDate) {
       Alert.alert("Invalid Date Range", "End date cannot be before start date");
       return;
     }
     
-    // Validate end date is not in future
     const today = getBangladeshTime();
     today.setHours(23, 59, 59, 999);
     
@@ -196,7 +344,6 @@ export default function TransactionManagementScreen() {
       return;
     }
     
-    // Set time to end of day
     selectedDate.setHours(23, 59, 59, 999);
     setEndDate(selectedDate);
     setDateRange("Custom");
@@ -245,7 +392,7 @@ export default function TransactionManagementScreen() {
           "TransactionType": formTxn,
           "Remarks": formRemarks,
           "CreatedBy": "API User",
-          "OrganizationId": 13
+          "OrganizationId": organizationId
         })
       });
 
@@ -285,7 +432,7 @@ export default function TransactionManagementScreen() {
           "Remarks": formRemarks,
           "CreatedDate": formattedDate,
           "CreatedBy": "Admin",
-          "OrganizationId": 13
+          "OrganizationId": organizationId
         })
       });
 
@@ -342,7 +489,6 @@ export default function TransactionManagementScreen() {
     setFormTxn(item.TransactionType);
     setFormRemarks(item.Remarks);
     
-    // Parse the date from the item
     const timestamp = parseInt(item.ExpenseDate.replace(/\/Date\((\d+)\)\//, '$1'));
     const expenseDate = new Date(timestamp);
     setFormExpenseDate(expenseDate);
@@ -387,10 +533,11 @@ export default function TransactionManagementScreen() {
     }
   };
 
-  if (loading) {
+  if (orgLoading || loading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#28a745" />
+        <ThemedText style={{ marginTop: 10, color: '#666' }}>Loading...</ThemedText>
       </View>
     );
   }
@@ -453,23 +600,63 @@ export default function TransactionManagementScreen() {
       <FlatList
         ListHeaderComponent={
           <>
-            {/* Header Area */}
-            <View style={styles.header}>
-              <ThemedText style={styles.headerTitle}>Transaction Management</ThemedText>
-              <TouchableOpacity style={styles.addBtn} onPress={openCreateModal}>
-                <ThemedText style={styles.addBtnText}>+ Add New</ThemedText>
-              </TouchableOpacity>
+            {/* Header - With Add New Button on Right */}
+            <View style={styles.blueHeader}>
+              <View style={styles.headerRow}>
+                <View style={styles.headerTitleRow}>
+                  <Ionicons name="cash-outline" size={24} color="white" />
+                  <ThemedText style={styles.headerTitleText}>Transaction Management</ThemedText>
+                </View>
+                <TouchableOpacity style={styles.headerAddBtn} onPress={openCreateModal}>
+                  <Ionicons name="add-circle-outline" size={18} color="white" />
+                  <ThemedText style={styles.headerAddBtnText}> Add New</ThemedText>
+                </TouchableOpacity>
+              </View>
+              {organizationName ? (
+                <ThemedText style={styles.headerSubtitle}>
+                  {organizationName}
+                </ThemedText>
+              ) : null}
             </View>
+
+            {/* Organization Selector */}
+            {organizations.length > 0 && (
+              <View style={styles.orgCard}>
+                <View style={styles.orgHeader}>
+                  <Ionicons name="business" size={18} color="#28a745" />
+                  <ThemedText style={styles.orgTitle}>Organization</ThemedText>
+                </View>
+                <View style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={organizationId || 0}
+                    onValueChange={handleOrgChange}
+                    style={styles.picker}
+                  >
+                    {/* <Picker.Item label="-- Select Organization --" value={0} /> */}
+                    {organizations.map((org) => (
+                      <Picker.Item
+                        key={org.OrganizationId}
+                        label={org.OrganizationName || `Organization ${org.OrganizationId}`}
+                        value={org.OrganizationId}
+                      />
+                    ))}
+                  </Picker>
+                </View>
+                {/* {organizationName ? (
+                  <ThemedText style={styles.selectedOrgText}>
+                    Selected: {organizationName}
+                  </ThemedText>
+                ) : null} */}
+              </View>
+            )}
 
             {/* Filter Section */}
             <View style={styles.filterSection}>
               <View style={styles.row}>
-                {/* Date Range Selector Button */}
                 <TouchableOpacity style={[styles.input, { flex: 1 }]} onPress={() => setRangeModal(true)}>
                   <ThemedText style={styles.dropTxt}>{dateRange} ▾</ThemedText>
                 </TouchableOpacity>
                 
-                {/* Start Date Picker Button */}
                 <TouchableOpacity 
                   style={[styles.input, { flex: 1, justifyContent: 'center' }]} 
                   onPress={() => {
@@ -481,7 +668,6 @@ export default function TransactionManagementScreen() {
                   </ThemedText>
                 </TouchableOpacity>
                 
-                {/* End Date Picker Button */}
                 <TouchableOpacity 
                   style={[styles.input, { flex: 1, justifyContent: 'center' }]} 
                   onPress={() => {
@@ -495,17 +681,14 @@ export default function TransactionManagementScreen() {
               </View>
               
               <View style={[styles.row, { marginTop: 8 }]}>
-                {/* Expense Type Selector Button */}
                 <TouchableOpacity style={[styles.input, { flex: 1 }]} onPress={() => setTypeModal(true)}>
                   <ThemedText style={styles.dropTxt}>{selectedType} ▾</ThemedText>
                 </TouchableOpacity>
                 
-                {/* Txn Type Selector Button */}
                 <TouchableOpacity style={[styles.input, { flex: 1 }]} onPress={() => setTxnModal(true)}>
                   <ThemedText style={styles.dropTxt}>{selectedTxn} ▾</ThemedText>
                 </TouchableOpacity>
                 
-                {/* Action Buttons: Search & Reset */}
                 <View style={{ flex: 1.2, flexDirection: 'row', gap: 6 }}>
                   <TouchableOpacity style={styles.resetBtn} onPress={resetFilters}>
                     <ThemedText style={styles.resetBtnText}>Reset</ThemedText>
@@ -667,27 +850,118 @@ const SummaryBox = ({ label, value, color }: { label: string; value: string; col
 );
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f4f6f9", paddingHorizontal: 12, paddingTop: 12 },
+  container: { 
+    flex: 1, 
+    backgroundColor: "#f4f6f9", 
+    paddingHorizontal: 12,
+    paddingTop: 0,
+    paddingBottom: 12,
+  },
   center: { flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 40 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 15 },
-  headerTitle: { fontSize: 18, fontWeight: "bold", color: "#333" },
-  addBtn: { backgroundColor: "#28a745", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6 },
-  addBtnText: { color: "white", fontSize: 12, fontWeight: "bold" },
 
-  filterSection: { backgroundColor: "white", padding: 10, borderRadius: 8, marginBottom: 15, elevation: 2 },
+  // Blue Header with Add New Button
+  blueHeader: {
+    backgroundColor: "#28a745",
+  paddingVertical: 16,
+  paddingHorizontal: 16,
+  borderBottomLeftRadius: 12,
+  borderBottomRightRadius: 12,
+  overflow: 'hidden',
+  marginBottom: 20,
+  },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  headerTitleRow: { 
+    flexDirection: "row", 
+    alignItems: "center", 
+    gap: 10,
+    flex: 1,
+  },
+  headerTitleText: { 
+    color: "white", 
+    fontSize: 18, 
+    fontWeight: "bold",
+  },
+  headerAddBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+  },
+  headerAddBtnText: {
+    color: "white",
+    fontSize: 13,
+    fontWeight: "bold",
+    marginLeft: 4,
+  },
+  headerSubtitle: { 
+    color: "white", 
+    fontSize: 12, 
+    marginTop: 4, 
+    opacity: 0.9,
+  },
+
+  // Organization Card
+  orgCard: {
+    backgroundColor: "white",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 12,
+    elevation: 2,
+  },
+  orgHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  orgTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
+    marginLeft: 8,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 6,
+    backgroundColor: "#FAFAFA",
+    overflow: "hidden",
+  },
+  picker: {
+    height: 50,
+    width: "100%",
+  },
+  selectedOrgText: {
+    fontSize: 12,
+    color: "#28a745",
+    marginTop: 8,
+    textAlign: "center",
+    fontWeight: "bold",
+  },
+
+  filterSection: { backgroundColor: "white", padding: 10, borderRadius: 10, marginBottom: 15, elevation: 2 },
   row: { flexDirection: "row", gap: 6 },
   input: { height: 35, borderWidth: 1, borderColor: "#ddd", borderRadius: 4, paddingHorizontal: 6, justifyContent: "center", backgroundColor: '#fff' },
   dropTxt: { fontSize: 11, color: "#333" },
   placeholderText: { color: "#999" },
   searchBtn: { backgroundColor: "#007bff", flex: 1, height: 35, borderRadius: 4, justifyContent: "center", alignItems: "center" },
   searchBtnText: { color: "white", fontWeight: "bold", fontSize: 12 },
+  resetBtn: { backgroundColor: "#6c757d", flex: 1, height: 35, borderRadius: 4, justifyContent: "center", alignItems: "center" },
+  resetBtnText: { color: "white", fontWeight: "bold", fontSize: 12 },
 
-  summaryContainer: { backgroundColor: "#e8f5e9", padding: 12, borderRadius: 10, marginBottom: 20 },
+  summaryContainer: { backgroundColor: "#e8f5e9", padding: 15, borderRadius: 12, marginBottom: 20 },
   summaryTitle: { fontSize: 14, fontWeight: "bold", color: "#2e7d32", marginBottom: 10 },
-  gridRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  summaryBox: { backgroundColor: "white", padding: 10, borderRadius: 8, flex: 1, alignItems: "center", elevation: 1 },
+  gridRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
+  summaryBox: { backgroundColor: "white", padding: 12, borderRadius: 8, flex: 1, alignItems: "center", elevation: 1 },
   summaryLabel: { fontSize: 11, color: "#666", marginBottom: 4 },
-  summaryValue: { fontSize: 14, fontWeight: "bold" },
+  summaryValue: { fontSize: 15, fontWeight: "bold" },
 
   tableBorderWrapper: { borderWidth: 1, borderColor: '#CCCCCC', borderRadius: 6, overflow: 'hidden', backgroundColor: '#FFFFFF', width: 770, marginBottom: 20 },
   tableRow: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#CCCCCC' },
@@ -717,7 +991,4 @@ const styles = StyleSheet.create({
   radioBtn: { flex: 1, borderWidth: 1, borderColor: '#ccc', height: 35, borderRadius: 6, justifyContent: 'center', alignItems: 'center' },
   radioActive: { backgroundColor: '#007bff', borderColor: '#007bff' },
   radioTxt: { color: '#333' }, radioActiveTxt: { color: '#fff', fontWeight: 'bold' },
-
-  resetBtn: { backgroundColor: "#6c757d", flex: 1, height: 35, borderRadius: 4, justifyContent: "center", alignItems: "center" },
-  resetBtnText: { color: "white", fontWeight: "bold", fontSize: 12 },
 });

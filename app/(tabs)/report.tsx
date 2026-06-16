@@ -14,13 +14,37 @@ import {
 import { ThemedText } from "@/components/themed-text";
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-icons";
 import DateTimePicker from '@react-native-community/datetimepicker';
-import * as FileSystem from 'expo-file-system';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Picker } from "@react-native-picker/picker";
 import * as Sharing from 'expo-sharing';
 
-const API_KEY = "3A734AC6-A521-4192-984D-08D082B83456";
-const BASE_URL = "http://devmystock.byteheart.com";
+interface Organization {
+  OrganizationId: number;
+  ApiKey: string;
+  OrganizationName?: string;
+}
+
+interface UserSession {
+  Success: boolean;
+  Message: string;
+  Token: string | null;
+  UserId: string;
+  UserName: string;
+  RoleName: string;
+  OrganizationId: number;
+  OrganizationName: string;
+  ApiKey: string;
+  Organizations: Organization[];
+}
 
 export default function StockReportScreen() {
+  // Organization States
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [organizationName, setOrganizationName] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [orgLoading, setOrgLoading] = useState<boolean>(true);
+
   const [activeTab, setActiveTab] = useState("Stock Report");
   const [reportPeriod, setReportPeriod] = useState("daily");
   
@@ -42,15 +66,134 @@ export default function StockReportScreen() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   
-  const [shopName, setShopName] = useState("BH Fish Mart");
-  const [shopAddress, setShopAddress] = useState("Uttara 1230");
+  const [shopName, setShopName] = useState("");
+  const [shopAddress, setShopAddress] = useState("");
   const [reportPeriodText, setReportPeriodText] = useState("");
   const [reportDate, setReportDate] = useState("");
   
   const searchInputRef = useRef<TextInput>(null);
 
+  const BASE_URL = "http://devmystock.byteheart.com";
+  
+  // Load user session on mount
+  useEffect(() => {
+    loadUserSession();
+  }, []);
+
+  // Fetch data when organization changes
+  useEffect(() => {
+    if (organizationId && apiKey) {
+      loadData();
+    }
+  }, [organizationId, apiKey, activeTab, reportPeriod, singleDate, startDate, endDate]);
+
+  const loadUserSession = async () => {
+    try {
+      const session = await AsyncStorage.getItem("user_session");
+      if (!session) {
+        Alert.alert("Error", "Session not found. Please login again.");
+        setOrgLoading(false);
+        setLoading(false);
+        return;
+      }
+
+      const userData: UserSession = JSON.parse(session);
+      
+      if (userData.Organizations && userData.Organizations.length > 0) {
+        try {
+          const headers = {
+            Authorization: `Bearer ${userData.ApiKey}`,
+            "Content-Type": "application/json",
+          };
+          const orgUrl = `http://devmystock.byteheart.com/Dashboard/GetAllOrganization?userId=${userData.UserId}`;
+          const orgResponse = await fetch(orgUrl, { headers });
+          const orgData = await orgResponse.json();
+          
+          const orgNameMap = new Map();
+          if (orgData && orgData.success && Array.isArray(orgData.data)) {
+            orgData.data.forEach((org: any) => {
+              const id = org.organizationId || org.id;
+              const name = org.organizationName || org.name;
+              if (id && name) {
+                orgNameMap.set(id, name);
+              }
+            });
+          }
+          
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: orgNameMap.get(org.OrganizationId) || `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName || userData.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          } else {
+            const firstOrg = orgsWithNames[0];
+            setOrganizationId(firstOrg.OrganizationId);
+            setOrganizationName(firstOrg.OrganizationName || `Organization ${firstOrg.OrganizationId}`);
+            setApiKey(firstOrg.ApiKey);
+          }
+        } catch (error) {
+          console.error("Error fetching organization names:", error);
+          Alert.alert("Error", "Failed to load organization information");
+          const orgsWithNames = userData.Organizations.map(org => ({
+            ...org,
+            OrganizationName: `Organization ${org.OrganizationId}`
+          }));
+          setOrganizations(orgsWithNames);
+          
+          const defaultOrg = orgsWithNames.find(
+            org => org.OrganizationId === userData.OrganizationId
+          );
+          
+          if (defaultOrg) {
+            setOrganizationId(defaultOrg.OrganizationId);
+            setOrganizationName(defaultOrg.OrganizationName);
+            setApiKey(defaultOrg.ApiKey);
+          }
+        }
+      } else {
+        Alert.alert("Error", "No organizations found for this user");
+        setOrgLoading(false);
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error("Error loading session:", error);
+      Alert.alert("Error", "Failed to load user session");
+      setOrgLoading(false);
+      setLoading(false);
+    } finally {
+      setOrgLoading(false);
+    }
+  };
+
+  const handleOrgChange = (orgId: number) => {
+    if (orgId === 0) return;
+    
+    const selectedOrg = organizations.find(org => org.OrganizationId === orgId);
+    if (selectedOrg) {
+      setOrganizationId(selectedOrg.OrganizationId);
+      setOrganizationName(selectedOrg.OrganizationName || `Organization ${selectedOrg.OrganizationId}`);
+      setApiKey(selectedOrg.ApiKey);
+      // Reset data when organization changes
+      setStockData([]);
+      setTransactionData([]);
+      setPaymentSummaryData([]);
+      setSearchQuery("");
+      setShopName("");
+      setShopAddress("");
+    }
+  };
+
   const getHeaders = () => ({
-    "Authorization": `Bearer ${API_KEY}`,
+    "Authorization": `Bearer ${apiKey}`,
     "Content-Type": "application/json",
   });
 
@@ -93,12 +236,12 @@ export default function StockReportScreen() {
     }
   };
 
-  // Download file helper function - Fixed version
+  // Download file helper function
   const downloadAndShareFile = async (url: string, fileName: string, fileType: string) => {
     try {
       setDownloading(true);
       const { startDate, endDate } = getCurrentDateRange();
-      const fullUrl = `${BASE_URL}${url}?startDate=${startDate}&endDate=${endDate}`;
+      const fullUrl = `${BASE_URL}${url}?startDate=${startDate}&endDate=${endDate}&organizationId=${organizationId}`;
       
       console.log("Downloading from:", fullUrl);
       
@@ -113,7 +256,6 @@ export default function StockReportScreen() {
       if (result.success && result.filePath) {
         const fileUrl = `${BASE_URL}${result.filePath}`;
         
-        // Check if sharing is available
         if (await Sharing.isAvailableAsync()) {
           await Sharing.shareAsync(fileUrl, {
             mimeType: fileType === 'excel' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
@@ -123,7 +265,6 @@ export default function StockReportScreen() {
           });
           Alert.alert("Success", `${fileName} downloaded successfully!`);
         } else {
-          // Fallback: Open in browser
           await Linking.openURL(fileUrl);
           Alert.alert("Success", `${fileName} is being downloaded in your browser`);
         }
@@ -155,12 +296,12 @@ export default function StockReportScreen() {
     await downloadAndShareFile("/Report/ExportPDF", "Stock_Report", "pdf");
   };
 
-  // Print Report - Fixed without FileSystem
+  // Print Report
   const printReport = async () => {
     try {
       setDownloading(true);
       const { startDate, endDate } = getCurrentDateRange();
-      const fullUrl = `${BASE_URL}/Report/Print?startDate=${startDate}&endDate=${endDate}`;
+      const fullUrl = `${BASE_URL}/Report/Print?startDate=${startDate}&endDate=${endDate}&organizationId=${organizationId}`;
       
       console.log("Printing from:", fullUrl);
       
@@ -175,13 +316,12 @@ export default function StockReportScreen() {
       if (result.success && result.isData && result.data) {
         const summary = result.data.Summary;
         const printData = {
-          shopName: result.data.ShopName,
-          address: result.data.Address,
+          shopName: result.data.ShopName || organizationName,
+          address: result.data.Address || "",
           reportPeriod: result.data.ReportPeriod,
           summary: summary
         };
         
-        // Show alert with summary
         Alert.alert(
           "Print Report Summary",
           `Shop: ${printData.shopName}\n` +
@@ -228,10 +368,9 @@ export default function StockReportScreen() {
     }
   };
 
-  // Share report data as text - Fixed without FileSystem
+  // Share report data as text
   const shareReportData = async (data: any) => {
     try {
-      // Create formatted text report
       const reportText = `
 STOCK REPORT SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -290,7 +429,6 @@ Report Generated by Stock Management System
     }
   };
 
-  // Rest of your existing functions (filterReport, fetchStockReport, etc.)
   const filterReport = async () => {
     try {
       let filterStartDate, filterEndDate;
@@ -309,6 +447,7 @@ Report Generated by Stock Management System
         body: JSON.stringify({
           StartDate: filterStartDate,
           EndDate: filterEndDate,
+          OrganizationId: organizationId,
         }),
       });
       const result = await response.json();
@@ -321,7 +460,7 @@ Report Generated by Stock Management System
   const fetchStockReport = async () => {
     try {
       setApiError(null);
-      const response = await fetch(`${BASE_URL}/Report/GenerateReport`, {
+      const response = await fetch(`${BASE_URL}/Report/GenerateReport?organizationId=${organizationId}`, {
         method: "GET",
         headers: getHeaders(),
       });
@@ -362,7 +501,7 @@ Report Generated by Stock Management System
       }
       
       const response = await fetch(
-        `${BASE_URL}/Report/GetTransactionDetails?startDate=${filterStartDate}&endDate=${filterEndDate}`,
+        `${BASE_URL}/Report/GetTransactionDetails?startDate=${filterStartDate}&endDate=${filterEndDate}&organizationId=${organizationId}`,
         { headers: getHeaders() }
       );
       const result = await response.json();
@@ -393,7 +532,7 @@ Report Generated by Stock Management System
       }
       
       const response = await fetch(
-        `${BASE_URL}/Report/GetPaymentSummary?startDate=${filterStartDate}&endDate=${filterEndDate}`,
+        `${BASE_URL}/Report/GetPaymentSummary?startDate=${filterStartDate}&endDate=${filterEndDate}&organizationId=${organizationId}`,
         { headers: getHeaders() }
       );
       const result = await response.json();
@@ -412,6 +551,12 @@ Report Generated by Stock Management System
   };
 
   const loadData = async () => {
+    if (!organizationId || !apiKey) {
+      Alert.alert("Error", "Organization or API key not found");
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     await filterReport();
     
@@ -432,10 +577,6 @@ Report Generated by Stock Management System
     setRefreshing(false);
   };
 
-  useEffect(() => {
-    loadData();
-  }, [activeTab, reportPeriod, singleDate, startDate, endDate]);
-
   const getFilteredData = () => {
     let data: any[] = [];
     if (activeTab === "Stock Report") data = stockData;
@@ -450,7 +591,7 @@ Report Generated by Stock Management System
     });
   };
 
-  // Table Components (keep your existing table components)
+  // Table Components
   const StockFullTable = () => {
     const data = getFilteredData();
     
@@ -514,6 +655,15 @@ Report Generated by Stock Management System
     return <StockFullTable />;
   };
 
+  if (orgLoading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color="#0056b3" />
+        <ThemedText style={{ marginTop: 10, color: '#666' }}>Loading...</ThemedText>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       {downloading && (
@@ -534,8 +684,41 @@ Report Generated by Stock Management System
             <MaterialCommunityIcons name="chart-bar" size={24} color="white" />
             <ThemedText style={styles.headerTitleText}>Stock Report</ThemedText>
           </View>
-          <ThemedText style={styles.headerSubText}>Generate stock reports by date or range</ThemedText>
+          {organizationName ? (
+            <ThemedText style={styles.headerSubText}>{organizationName}</ThemedText>
+          ) : null}
         </View>
+
+        {/* Organization Selector */}
+        {organizations.length > 0 && (
+          <View style={styles.orgCard}>
+            <View style={styles.orgHeader}>
+              <Ionicons name="business" size={18} color="#0056b3" />
+              <ThemedText style={styles.orgTitle}>Organization</ThemedText>
+            </View>
+            <View style={styles.pickerContainer}>
+              <Picker
+                selectedValue={organizationId || 0}
+                onValueChange={handleOrgChange}
+                style={styles.picker}
+              >
+                {/* <Picker.Item label="-- Select Organization --" value={0} /> */}
+                {organizations.map((org) => (
+                  <Picker.Item
+                    key={org.OrganizationId}
+                    label={org.OrganizationName || `Organization ${org.OrganizationId}`}
+                    value={org.OrganizationId}
+                  />
+                ))}
+              </Picker>
+            </View>
+            {/* {organizationName ? (
+              <ThemedText style={styles.selectedOrgText}>
+                Selected: {organizationName}
+              </ThemedText>
+            ) : null} */}
+          </View>
+        )}
 
         {/* Filter Card */}
         <View style={styles.filterCard}>
@@ -608,14 +791,14 @@ Report Generated by Stock Management System
         </ScrollView>
 
         {/* Org Info */}
-        <View style={styles.orgInfo}>
-          <ThemedText style={styles.orgName}>{shopName}</ThemedText>
+        {/* <View style={styles.orgInfo}>
+          <ThemedText style={styles.orgName}>{shopName || organizationName}</ThemedText>
           <ThemedText style={styles.orgAddress}>{shopAddress}</ThemedText>
           {reportPeriodText && <ThemedText style={styles.reportPeriod}>{reportPeriodText}</ThemedText>}
           <View style={styles.reportTitleBadge}>
             <ThemedText style={styles.reportTitleText}>{activeTab.toUpperCase()}</ThemedText>
           </View>
-        </View>
+        </View> */}
 
         {/* Search Box */}
         <View style={styles.searchBox}>
@@ -688,11 +871,69 @@ Report Generated by Stock Management System
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f0f2f5" },
-  blueHeader: { backgroundColor: "#0056b3", padding: 20, borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  
+  // Blue Header
+  blueHeader: { 
+    backgroundColor: "#0056b3", 
+    padding: 20, 
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    margin: 10,
+    marginBottom: 5,
+  },
   headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerTitleText: { color: 'white', fontSize: 20, fontWeight: 'bold' },
   headerSubText: { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginTop: 5 },
-  filterCard: { backgroundColor: 'white', margin: 15, borderRadius: 15, padding: 15, elevation: 3, marginTop: -20 },
+
+  // Organization Card
+  orgCard: {
+    backgroundColor: 'white',
+    marginLeft: 15,
+    marginRight: 15,
+    marginTop: -10,
+    borderRadius: 15,
+    padding: 15,
+    elevation: 3,
+  },
+  orgHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  orgTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginLeft: 8,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    backgroundColor: '#FAFAFA',
+    overflow: 'hidden',
+  },
+  picker: {
+    height: 50,
+    width: '100%',
+  },
+  selectedOrgText: {
+    fontSize: 12,
+    color: '#0056b3',
+    marginTop: 8,
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+
+  filterCard: { 
+    backgroundColor: 'white', 
+    margin: 15, 
+    borderRadius: 15, 
+    padding: 15, 
+    elevation: 3,
+    marginTop: 15,
+  },
   filterLabel: { fontSize: 14, fontWeight: 'bold', marginBottom: 10 },
   periodBtnRow: { flexDirection: 'row', gap: 10, marginBottom: 15 },
   periodBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#007bff', alignItems: 'center' },
@@ -713,11 +954,6 @@ const styles = StyleSheet.create({
   reportPeriod: { fontSize: 11, color: '#666', marginTop: 2, fontStyle: 'italic' },
   reportTitleBadge: { backgroundColor: '#eef2f7', paddingHorizontal: 15, paddingVertical: 5, borderRadius: 20, marginTop: 8 },
   reportTitleText: { fontSize: 11, fontWeight: 'bold', color: '#333' },
-  tabRow: { flexDirection: 'row', backgroundColor: 'white', padding: 5, marginHorizontal: 15, borderRadius: 10, marginBottom: 15 },
-  tabItem: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
-  tabItemActive: { backgroundColor: '#007bff' },
-  tabText: { fontSize: 12, color: '#666' },
-  tabTextActive: { color: 'white', fontWeight: 'bold' },
   searchBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', marginHorizontal: 15, paddingHorizontal: 12, borderRadius: 10, height: 45, marginBottom: 15, borderWidth: 1, borderColor: '#eee' },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 14, padding: 0 },
   tableScrollView: { marginHorizontal: 15, marginBottom: 10 },
