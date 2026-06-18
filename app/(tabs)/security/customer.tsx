@@ -12,7 +12,8 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
-import { MaterialIcons } from "@expo/vector-icons";
+import { MaterialIcons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { ThemedText } from "@/components/themed-text";
 import { Picker } from "@react-native-picker/picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -55,6 +56,15 @@ export default function CustomerListScreen() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [modalVisible, setModalVisible] = useState<boolean>(false);
   
+  // Edit Customer States
+  const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
+  const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
+  const [editName, setEditName] = useState<string>("");
+  const [editPhone, setEditPhone] = useState<string>("");
+  const [editEmail, setEditEmail] = useState<string>("");
+  const [editAddress, setEditAddress] = useState<string>("");
+  const [submitting, setSubmitting] = useState<boolean>(false);
+
   // Organization States
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [organizationId, setOrganizationId] = useState<number | null>(null);
@@ -234,6 +244,123 @@ export default function CustomerListScreen() {
     setModalVisible(true);
   };
 
+  // Open Edit Modal
+  const openEditModal = (customer: Customer) => {
+    setEditCustomer(customer);
+    setEditName(customer.CustomerName || "");
+    setEditPhone(customer.PhoneNumber || "");
+    setEditEmail(customer.Email || "");
+    setEditAddress(customer.Address || "");
+    setEditModalVisible(true);
+  };
+
+  // EDIT: Edit Customer
+  const handleEditCustomer = async () => {
+    if (!editCustomer) return;
+
+    if (!editName.trim()) {
+      return Alert.alert("Validation Error", "Customer name is required");
+    }
+
+    if (!editPhone.trim()) {
+      return Alert.alert("Validation Error", "Phone number is required");
+    }
+
+    setSubmitting(true);
+
+    const payload = {
+      CustomerId: editCustomer.CustomerId,
+      CustomerName: editName.trim(),
+      PhoneNumber: editPhone.trim(),
+      Email: editEmail.trim() || "",
+      Address: editAddress.trim() || "",
+    };
+
+    console.log("=== Sending Edit Customer Request ===");
+    console.log("Payload:", JSON.stringify(payload, null, 2));
+
+    try {
+      const response = await fetch(
+        `http://devmystock.byteheart.com/Customer/Edit/${editCustomer.CustomerId}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+
+      const result = await response.json();
+      console.log("=== Edit Customer Response ===");
+      console.log("Full Response:", JSON.stringify(result, null, 2));
+
+      if (result.success === true) {
+        Alert.alert("Success", "Customer updated successfully");
+        setEditModalVisible(false);
+        setEditCustomer(null);
+        setEditName("");
+        setEditPhone("");
+        setEditEmail("");
+        setEditAddress("");
+        await fetchCustomers();
+      } else {
+        Alert.alert("Error", result.message || "Failed to update customer");
+      }
+    } catch (err) {
+      console.error("Edit customer error:", err);
+      Alert.alert("Error", "Network error occurred");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // DELETE: Delete Customer
+  const handleDeleteCustomer = async (customerId: number, customerName: string) => {
+    Alert.alert(
+      "Confirm Delete",
+      `Are you sure you want to delete "${customerName}"? This action cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const response = await fetch(
+                `http://devmystock.byteheart.com/Customer/Delete?id=${customerId}`,
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    "Content-Type": "application/json",
+                    Accept: "application/json",
+                  },
+                },
+              );
+
+              const result = await response.json();
+              console.log("=== Delete Customer Response ===");
+              console.log("Full Response:", JSON.stringify(result, null, 2));
+
+              if (result.success === true) {
+                Alert.alert("Success", "Customer deleted successfully");
+                await fetchCustomers();
+              } else {
+                Alert.alert("Error", result.message || "Failed to delete customer");
+              }
+            } catch (err) {
+              console.error("Delete customer error:", err);
+              Alert.alert("Error", "Network error occurred");
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const parseJsonDate = (dateStr: string | null) => {
     if (!dateStr) return 'N/A';
     try {
@@ -264,8 +391,17 @@ export default function CustomerListScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Customer Management</Text>
-      <View style={styles.titleUnderline} />
+      {/* <Text style={styles.title}>Customer Management</Text>
+      <View style={styles.titleUnderline} /> */}
+      <View style={styles.blueHeader}>
+          <View style={styles.headerTitleRow}>
+            <MaterialCommunityIcons name="chart-bar" size={24} color="white" />
+            <ThemedText style={styles.headerTitleText}>Customer Management</ThemedText>
+          </View>
+          {organizationName ? (
+            <ThemedText style={styles.headerSubText}>{organizationName}</ThemedText>
+          ) : null}
+        </View>
 
       {/* Organization Selector */}
       {organizations.length > 0 && (
@@ -290,11 +426,11 @@ export default function CustomerListScreen() {
               ))}
             </Picker>
           </View>
-          {organizationName ? (
+          {/* {organizationName ? (
             <Text style={styles.selectedOrgText}>
               Selected: {organizationName}
             </Text>
-          ) : null}
+          ) : null} */}
         </View>
       )}
 
@@ -344,11 +480,11 @@ export default function CustomerListScreen() {
                     <MaterialIcons name="visibility" size={16} color="#FFFFFF" />
                   </TouchableOpacity>
                   
-                  <TouchableOpacity style={styles.actionButtonSky}>
+                  <TouchableOpacity style={styles.actionButtonSky} onPress={() => openEditModal(item)}>
                     <MaterialIcons name="edit" size={16} color="#FFFFFF" />
                   </TouchableOpacity>
 
-                  <TouchableOpacity style={styles.actionButtonRed}>
+                  <TouchableOpacity style={styles.actionButtonRed} onPress={() => handleDeleteCustomer(item.CustomerId, item.CustomerName)}>
                     <MaterialIcons name="delete" size={16} color="#FFFFFF" />
                   </TouchableOpacity>
                 </View>
@@ -391,6 +527,102 @@ export default function CustomerListScreen() {
             <TouchableOpacity style={styles.closeButton} onPress={() => setModalVisible(false)}>
               <Text style={styles.closeButtonText}>Close</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit Customer Modal */}
+      <Modal
+        visible={editModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setEditModalVisible(false);
+          setEditCustomer(null);
+          setEditName("");
+          setEditPhone("");
+          setEditEmail("");
+          setEditAddress("");
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '85%' }]}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalTitle}>Edit Customer</Text>
+
+              <View style={styles.editFieldContainer}>
+                <Text style={styles.editLabel}>Customer Name *</Text>
+                <TextInput
+                  style={styles.editInput}
+                  placeholder="Enter customer name"
+                  value={editName}
+                  onChangeText={setEditName}
+                />
+              </View>
+
+              <View style={styles.editFieldContainer}>
+                <Text style={styles.editLabel}>Phone Number *</Text>
+                <TextInput
+                  style={styles.editInput}
+                  placeholder="Enter phone number"
+                  value={editPhone}
+                  onChangeText={setEditPhone}
+                  keyboardType="phone-pad"
+                />
+              </View>
+
+              <View style={styles.editFieldContainer}>
+                <Text style={styles.editLabel}>Email (Optional)</Text>
+                <TextInput
+                  style={styles.editInput}
+                  placeholder="Enter email address"
+                  value={editEmail}
+                  onChangeText={setEditEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.editFieldContainer}>
+                <Text style={styles.editLabel}>Address (Optional)</Text>
+                <TextInput
+                  style={[styles.editInput, styles.textArea]}
+                  placeholder="Enter address"
+                  value={editAddress}
+                  onChangeText={setEditAddress}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+              </View>
+
+              <View style={styles.editButtonRow}>
+                <TouchableOpacity
+                  style={[styles.editButton, { backgroundColor: '#6B7280' }]}
+                  onPress={() => {
+                    setEditModalVisible(false);
+                    setEditCustomer(null);
+                    setEditName("");
+                    setEditPhone("");
+                    setEditEmail("");
+                    setEditAddress("");
+                  }}
+                >
+                  <Text style={styles.editButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.editButton, { backgroundColor: '#28A745' }]}
+                  onPress={handleEditCustomer}
+                  disabled={submitting}
+                >
+                  {submitting ? (
+                    <ActivityIndicator size="small" color="white" />
+                  ) : (
+                    <Text style={styles.editButtonText}>Update Customer</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -604,4 +836,58 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 14,
   },
+
+  // Edit Modal Styles
+  editFieldContainer: {
+    marginBottom: 16,
+  },
+  editLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4B5563',
+    marginBottom: 6,
+  },
+  editInput: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: '#333333',
+    backgroundColor: '#FFFFFF',
+  },
+  textArea: {
+    height: 80,
+    paddingTop: 10,
+    textAlignVertical: 'top',
+  },
+  editButtonRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+    marginBottom: 5,
+  },
+  editButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  editButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+   blueHeader: { 
+    backgroundColor: "#093", 
+    padding: 20, 
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    margin: 10,
+    marginBottom: 5,
+  },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerTitleText: { color: 'white', fontSize: 20, fontWeight: 'bold' },
+  headerSubText: { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginTop: 5 },
 });

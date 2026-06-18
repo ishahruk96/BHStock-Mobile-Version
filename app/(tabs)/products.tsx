@@ -24,7 +24,7 @@ const { width, height } = Dimensions.get("window");
 // API URLs
 const PRODUCTS_API_URL = "http://devmystock.byteheart.com/Products/getallproduct";
 const ORG_LIST_URL = "http://devmystock.byteheart.com/Dashboard/GetAllOrganization";
-const DELETE_PRODUCT_API_URL = "http://devmystock.byteheart.com/Products/deleteproduct";
+const DELETE_PRODUCT_API_URL = "http://devmystock.byteheart.com/Products/Delete";
 const UNIT_TYPES_API_URL = "http://devmystock.byteheart.com/Products/GetUnitTypes";
 const CREATE_PRODUCT_API_URL = "http://devmystock.byteheart.com/Products/Create";
 const UPDATE_PRODUCT_API_URL = "http://devmystock.byteheart.com/Products/Edit";
@@ -1169,7 +1169,7 @@ export default function ProductManagementScreen() {
   const deleteProduct = async (productId: number) => {
     try {
       const response = await fetch(`${DELETE_PRODUCT_API_URL}?id=${productId}`, {
-        method: "DELETE",
+        method: "POST",
         headers: {
           Authorization: `Bearer ${selectedOrgApiKey}`,
           "Content-Type": "application/json",
@@ -1473,7 +1473,7 @@ export default function ProductManagementScreen() {
                   const statusColor = getStatusStyle(getStockStatus(item.CurrentStock, item.ReorderLevel));
                   
                   return (
-                    <View style={styles.tableRow}>
+                    <View style={[styles.tableRow, item.CurrentStock <= item.ReorderLevel && styles.lowStockRow]}>
                       <View
                         style={[styles.cell, styles.cellSn, styles.cellBorder]}
                       >
@@ -2133,6 +2133,10 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 14,
     color: "#999",
+  },
+  lowStockRow: {
+  backgroundColor: "#fff0f0", 
+  borderColor: "#ff6b6b", 
   },
   errorText: {
     textAlign: "center",

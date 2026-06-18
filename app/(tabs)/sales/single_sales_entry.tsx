@@ -17,6 +17,8 @@ import {
   KeyboardAvoidingView,
   TouchableWithoutFeedback,
   Keyboard,
+  Modal,
+  FlatList,
 } from "react-native";
 
 const BASE_URL = "http://devmystock.byteheart.com";
@@ -46,6 +48,14 @@ interface UserSession {
   OrganizationName: string;
   ApiKey: string;
   Organizations: Organization[];
+}
+
+interface Customer {
+  CustomerId?: number;
+  CustomerName: string;
+  PhoneNumber: string;
+  Email: string;
+  Address: string;
 }
 
 // Helper function for API calls with authentication
@@ -151,6 +161,190 @@ ${cart
   return receipt;
 };
 
+// Searchable Category Modal
+const SearchableCategoryModal = ({ 
+  visible, 
+  onClose, 
+  onSelect, 
+  categories, 
+  title 
+}: any) => {
+  const [searchText, setSearchText] = useState("");
+
+  const filteredCategories = searchText 
+    ? categories.filter((cat: string) => 
+        cat.toLowerCase().includes(searchText.toLowerCase())
+      )
+    : categories;
+
+  const handleSelect = (category: string) => {
+    onSelect(category);
+    onClose();
+    setSearchText("");
+  };
+
+  return (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={visible}
+      onRequestClose={() => {
+        onClose();
+        setSearchText("");
+      }}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.searchModalContainer}>
+          <View style={styles.searchModalHeader}>
+            <ThemedText style={styles.searchModalTitle}>{title}</ThemedText>
+            <TouchableOpacity onPress={() => {
+              onClose();
+              setSearchText("");
+            }}>
+              <Ionicons name="close" size={24} color="#333" />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.searchInputContainer}>
+            <Ionicons name="search" size={20} color="#999" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search categories..."
+              placeholderTextColor="#999"
+              value={searchText}
+              onChangeText={setSearchText}
+              autoFocus
+            />
+          </View>
+          
+          <FlatList
+            data={filteredCategories}
+            keyExtractor={(item, index) => index.toString()}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.searchModalItem}
+                onPress={() => handleSelect(item)}
+                activeOpacity={0.7}
+              >
+                <ThemedText style={styles.searchModalItemText}>{item}</ThemedText>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <ThemedText style={styles.emptyText}>No categories found</ThemedText>
+              </View>
+            }
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+// Searchable Product Modal
+const SearchableProductModal = ({ 
+  visible, 
+  onClose, 
+  onSelect, 
+  products, 
+  title,
+  selectedCategory 
+}: any) => {
+  const [searchText, setSearchText] = useState("");
+  
+  // Filter products by category if category is selected
+  const filteredByCategory = selectedCategory 
+    ? products.filter((p: any) => p.Category === selectedCategory)
+    : products;
+  
+  const filteredProducts = searchText 
+    ? filteredByCategory.filter((product: any) => 
+        product.ProductName.toLowerCase().includes(searchText.toLowerCase())
+      )
+    : filteredByCategory;
+
+  const handleSelect = (product: any) => {
+    console.log("Product selected from modal:", product);
+    onSelect(product);
+    onClose();
+    setSearchText("");
+  };
+
+  return (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={visible}
+      onRequestClose={() => {
+        onClose();
+        setSearchText("");
+      }}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.searchModalContainer}>
+          <View style={styles.searchModalHeader}>
+            <ThemedText style={styles.searchModalTitle}>{title}</ThemedText>
+            <TouchableOpacity onPress={() => {
+              onClose();
+              setSearchText("");
+            }}>
+              <Ionicons name="close" size={24} color="#333" />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.searchInputContainer}>
+            <Ionicons name="search" size={20} color="#999" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search products..."
+              placeholderTextColor="#999"
+              value={searchText}
+              onChangeText={setSearchText}
+              autoFocus
+            />
+          </View>
+          
+          {selectedCategory && (
+            <View style={styles.filterBadge}>
+              <Ionicons name="filter" size={14} color="#007bff" />
+              <ThemedText style={styles.filterBadgeText}>Category: {selectedCategory}</ThemedText>
+            </View>
+          )}
+          
+          <FlatList
+            data={filteredProducts}
+            keyExtractor={(item) => item.ProductId.toString()}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.searchModalItem}
+                onPress={() => handleSelect(item)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.productItemContainer}>
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={styles.searchModalItemText}>{item.ProductName}</ThemedText>
+                    <ThemedText style={styles.productCategoryText}>Category: {item.Category || "N/A"}</ThemedText>
+                  </View>
+                  <ThemedText style={styles.productStockText}>Stock: {item.CurrentStock || 0}</ThemedText>
+                </View>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <ThemedText style={styles.emptyText}>
+                  {selectedCategory ? `No products found in ${selectedCategory} category` : "No products found"}
+                </ThemedText>
+              </View>
+            }
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 export default function SingleSalesEntry() {
   const [loading, setLoading] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
@@ -175,6 +369,13 @@ export default function SingleSalesEntry() {
   const [apiKey, setApiKey] = useState<string>("");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [debugInfo, setDebugInfo] = useState("");
+  const [isCustomerLoading, setIsCustomerLoading] = useState(false);
+  const [customerLookupAttempted, setCustomerLookupAttempted] = useState(false);
+  
+  // Modal states
+  const [categoryModalVisible, setCategoryModalVisible] = useState(false);
+  const [productModalVisible, setProductModalVisible] = useState(false);
+  
   const scrollViewRef = useRef<ScrollView>(null);
 
   const [date] = useState(() => {
@@ -197,51 +398,47 @@ export default function SingleSalesEntry() {
 
   // Filter products when category changes
   useEffect(() => {
-  if (selectedProductId && selectedProductId !== null) {
-    const productList = filteredProducts.length > 0 ? filteredProducts : products;
-    const product = productList.find((p) => p.ProductId === selectedProductId);
-    if (product) {
-      setSelectedProduct(product);
-      setSalePrice(String(product.SalesValue || product.UnitPrice || 0));
-      if (product.Category) {
-        setSelectedCategory(product.Category);
-      }
+    if (selectedCategory) {
+      const filtered = products.filter(
+        (p) => p.Category === selectedCategory
+      );
+      setFilteredProducts(filtered);
     } else {
-      setSelectedProduct(null);
-      setQuantity("");
-      setSalePrice("");
+      setFilteredProducts([]);
     }
-  } else {
-    setSelectedProduct(null);
-    setQuantity("");
-    setSalePrice("");
-  }
-  setQuantity("");
-}, [selectedProductId, filteredProducts, products]);
+  }, [selectedCategory, products]);
 
-  // Update selected product when productId changes
+  // Customer phone lookup
   useEffect(() => {
-    if (selectedProductId && selectedProductId !== null) {
-      const productList = filteredProducts.length > 0 ? filteredProducts : products;
-      const product = productList.find((p) => p.ProductId === selectedProductId);
-      if (product) {
-        setSelectedProduct(product);
-        setSalePrice(String(product.SalesValue || product.UnitPrice || 0));
-        if (product.Category) {
-          setSelectedCategory(product.Category);
+    const lookupCustomer = async () => {
+      if (customerPhone && customerPhone.length >= 3) {
+        setCustomerLookupAttempted(true);
+        const customer = await fetchCustomerByPhone(customerPhone);
+        if (customer) {
+          // Auto-fill customer information
+          setCustomerName(customer.CustomerName || "");
+          setCustomerEmail(customer.Email || "");
+          setCustomerAddress(customer.Address || "");
+        } else {
+          // Clear customer fields if not found (but keep phone number)
+          if (!customerName) {
+            setCustomerName("");
+          }
+          setCustomerEmail("");
+          setCustomerAddress("");
         }
       } else {
-        setSelectedProduct(null);
-        setQuantity("");
-        setSalePrice("");
+        setCustomerLookupAttempted(false);
       }
-    } else {
-      setSelectedProduct(null);
-      setQuantity("");
-      setSalePrice("");
-    }
-    setQuantity("");
-  }, [selectedProductId, filteredProducts, products]);
+    };
+
+    // Debounce the API call
+    const timer = setTimeout(() => {
+      lookupCustomer();
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [customerPhone, organizationId]);
 
   const loadUserSession = async () => {
     try {
@@ -424,6 +621,77 @@ export default function SingleSalesEntry() {
     }
   };
 
+  // Fetch customer by phone number
+  const fetchCustomerByPhone = async (phoneNumber: string) => {
+    if (!phoneNumber || phoneNumber.length < 3 || !organizationId) {
+      return null;
+    }
+
+    try {
+      setIsCustomerLoading(true);
+      const url = `/Customer/GetByPhoneNumber?phoneNumber=${encodeURIComponent(phoneNumber)}&orgId=${organizationId}`;
+      const data = await apiRequest(url, apiKey);
+      
+      if (data.success && data.isData && data.customer) {
+        return data.customer;
+      }
+      return null;
+    } catch (error) {
+      console.error("Error fetching customer:", error);
+      return null;
+    } finally {
+      setIsCustomerLoading(false);
+    }
+  };
+
+  // Create new customer
+  const createCustomer = async (customerData: Customer) => {
+    try {
+      const data = await apiRequest("/Customer/Create", apiKey, {
+        method: "POST",
+        body: JSON.stringify({
+          CustomerName: customerData.CustomerName,
+          PhoneNumber: customerData.PhoneNumber,
+          Email: customerData.Email || "",
+          Address: customerData.Address || "",
+          OrganizationId: organizationId
+        }),
+      });
+
+      if (data.success && data.customer) {
+        return data.customer;
+      }
+      return null;
+    } catch (error) {
+      console.error("Error creating customer:", error);
+      return null;
+    }
+  };
+
+  const handleCategorySelect = (category: string) => {
+    console.log("Category selected:", category);
+    setSelectedCategory(category);
+    // Clear product selection when category changes
+    setSelectedProductId(null);
+    setSelectedProduct(null);
+    setQuantity("");
+    setSalePrice("");
+  };
+
+  const handleProductSelect = (product: any) => {
+    console.log("Product selected:", product);
+    // Immediately set the product
+    setSelectedProduct(product);
+    setSelectedProductId(product.ProductId);
+    setSalePrice(String(product.SalesValue || product.UnitPrice || 0));
+    // Auto-set category from product
+    if (product.Category) {
+      setSelectedCategory(product.Category);
+    }
+    // Clear quantity when product changes
+    setQuantity("");
+  };
+
   const handleAddToCart = async () => {
     const qty = parseFloat(quantity);
     const price = parseFloat(salePrice);
@@ -512,12 +780,41 @@ export default function SingleSalesEntry() {
     if (dueAmount > 0 && (!customerName || !customerPhone)) {
       Alert.alert(
         "Error",
-        "Customer name and phone are required when there's a due amount",
+        "Customer name and phone are required when there's a due amount"
       );
       return;
     }
 
     setLoading(true);
+
+    // Check if customer exists or needs to be created
+    let customerId = null;
+    let customerData = null;
+    
+    if (customerPhone && customerPhone.length >= 3) {
+      try {
+        // Try to find existing customer
+        const existingCustomer = await fetchCustomerByPhone(customerPhone);
+        if (existingCustomer && existingCustomer.CustomerId) {
+          customerId = existingCustomer.CustomerId;
+          customerData = existingCustomer;
+        } else if (customerName) {
+          // Create new customer if phone exists but customer not found
+          const newCustomer = await createCustomer({
+            CustomerName: customerName,
+            PhoneNumber: customerPhone,
+            Email: customerEmail || "",
+            Address: customerAddress || ""
+          });
+          if (newCustomer && newCustomer.CustomerId) {
+            customerId = newCustomer.CustomerId;
+            customerData = newCustomer;
+          }
+        }
+      } catch (error) {
+        console.error("Error handling customer:", error);
+      }
+    }
 
     const saleData: any = {
       TransactionType: "OUT",
@@ -540,7 +837,10 @@ export default function SingleSalesEntry() {
       })),
     };
 
-    if (customerName || customerPhone || customerEmail || customerAddress) {
+    // Add customer information if available
+    if (customerId) {
+      saleData.CustomerId = customerId;
+    } else if (customerName || customerPhone) {
       saleData.Customer = {
         CustomerName: customerName || "",
         PhoneNumber: customerPhone || "",
@@ -588,6 +888,9 @@ export default function SingleSalesEntry() {
         let successMessage = `Sales saved successfully!\nTransaction: #${transactionNumber}`;
         if (dueAmount > 0) {
           successMessage += `\nDue Amount: ৳${dueAmount.toFixed(2)}`;
+        }
+        if (customerData) {
+          successMessage += `\nCustomer: ${customerData.CustomerName}`;
         }
 
         Alert.alert("Success", successMessage, [
@@ -683,6 +986,7 @@ export default function SingleSalesEntry() {
     setCustomerPhone("");
     setCustomerEmail("");
     setCustomerAddress("");
+    setCustomerLookupAttempted(false);
   };
 
   const handleSaveSale = () => {
@@ -731,6 +1035,25 @@ export default function SingleSalesEntry() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Category Modal */}
+      <SearchableCategoryModal
+        visible={categoryModalVisible}
+        onClose={() => setCategoryModalVisible(false)}
+        onSelect={handleCategorySelect}
+        categories={categories}
+        title="Select Category"
+      />
+      
+      {/* Product Modal */}
+      <SearchableProductModal
+        visible={productModalVisible}
+        onClose={() => setProductModalVisible(false)}
+        onSelect={handleProductSelect}
+        products={products}
+        title="Select Product"
+        selectedCategory={selectedCategory}
+      />
+
       <KeyboardAvoidingView 
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={{ flex: 1 }}
@@ -812,59 +1135,32 @@ export default function SingleSalesEntry() {
                   <ThemedText style={styles.cardTitle}>Product Selection</ThemedText>
                 </View>
 
-                {/* Product Dropdown (Primary) */}
-<ThemedText style={styles.label}>Product *</ThemedText>
-<View style={styles.pickerContainer}>
-  <Picker
-    selectedValue={selectedProductId}
-    onValueChange={(itemValue) => {
-      console.log("Product selected value:", itemValue);
-      // Immediately update the selectedProductId
-      setSelectedProductId(itemValue);
-      // Also immediately find and set the product
-      if (itemValue && itemValue !== null) {
-        const productList = filteredProducts.length > 0 ? filteredProducts : products;
-        const product = productList.find((p) => p.ProductId === itemValue);
-        if (product) {
-          setSelectedProduct(product);
-          setSalePrice(String(product.SalesValue || product.UnitPrice || 0));
-          if (product.Category) {
-            setSelectedCategory(product.Category);
-          }
-        }
-      }
-    }}
-  >
-    <Picker.Item label="-- Select Product --" value={null} />
-    {(filteredProducts.length > 0 ? filteredProducts : products).map((prod) => (
-      <Picker.Item
-        key={prod.ProductId}
-        label={`${prod.ProductName} (Stock: ${prod.CurrentStock || 0})`}
-        value={prod.ProductId}
-      />
-    ))}
-  </Picker>
-</View>
+                {/* Product Selection with Search */}
+                <ThemedText style={styles.label}>Product *</ThemedText>
+                <TouchableOpacity
+                  style={styles.searchableField}
+                  onPress={() => setProductModalVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <ThemedText style={selectedProduct ? styles.selectedText : styles.placeholderText}>
+                    {selectedProduct ? selectedProduct.ProductName : "Search and select product..."}
+                  </ThemedText>
+                  <Ionicons name="search" size={20} color="#28A745" />
+                </TouchableOpacity>
 
-                {/* Category Dropdown (Secondary) */}
-                <ThemedText style={styles.label}>Category</ThemedText>
-                <View style={styles.pickerContainer}>
-                  <Picker
-                    selectedValue={selectedCategory}
-                    onValueChange={(itemValue) => {
-                      setSelectedCategory(itemValue);
-                      setSelectedProductId(null);
-                      setSelectedProduct(null);
-                      setQuantity("");
-                      setSalePrice("");
-                    }}
-                  >
-                    <Picker.Item label="-- Select Category --" value={null} />
-                    {categories.map((cat, index) => (
-                      <Picker.Item key={index} label={cat} value={cat} />
-                    ))}
-                  </Picker>
-                </View>
+                {/* Category Selection with Search */}
+                <ThemedText style={[styles.label, { marginTop: 12 }]}>Category</ThemedText>
+                <TouchableOpacity
+                  style={styles.searchableField}
+                  onPress={() => setCategoryModalVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <ThemedText style={selectedCategory ? styles.selectedText : styles.placeholderText}>
+                    {selectedCategory || "Search and select category..."}
+                  </ThemedText>
+                  <Ionicons name="search" size={20} color="#28A745" />
+                </TouchableOpacity>
+
                 {categories.length === 0 && !loading && (
                   <ThemedText style={styles.errorText}>
                     No categories available. Please check API connection.
@@ -1098,37 +1394,98 @@ export default function SingleSalesEntry() {
                   </ThemedText>
                 </View>
 
-                <LabelInput
-                  label="Customer Name"
-                  icon="person-outline"
-                  value={customerName}
-                  onChangeText={setCustomerName}
-                  placeholder="Walk-in Customer"
-                />
-                <LabelInput
-                  label="Phone Number"
-                  icon="call-outline"
-                  keyboardType="phone-pad"
-                  value={customerPhone}
-                  onChangeText={setCustomerPhone}
-                  placeholder="Optional"
-                />
-                <LabelInput
-                  label="Email"
-                  icon="mail-outline"
-                  keyboardType="email-address"
-                  value={customerEmail}
-                  onChangeText={setCustomerEmail}
-                  placeholder="Optional"
-                />
-                <LabelInput
-                  label="Address"
-                  icon="location-outline"
-                  multiline
-                  value={customerAddress}
-                  onChangeText={setCustomerAddress}
-                  placeholder="Optional"
-                />
+                <View style={{ marginBottom: 12 }}>
+                  <View style={styles.labelRow}>
+                    <Ionicons name="call-outline" size={14} color="#666" />
+                    <ThemedText style={[styles.label, { marginBottom: 0, marginLeft: 5 }]}>
+                      Phone Number
+                    </ThemedText>
+                    {isCustomerLoading && (
+                      <ActivityIndicator size="small" color="#28A745" style={{ marginLeft: 8 }} />
+                    )}
+                  </View>
+                  <View style={styles.phoneInputContainer}>
+                    <TextInput
+                      style={[styles.input, { flex: 1 }]}
+                      placeholder="Enter phone number to lookup"
+                      keyboardType="phone-pad"
+                      value={customerPhone}
+                      onChangeText={setCustomerPhone}
+                    />
+                    {customerPhone && customerPhone.length >= 3 && !isCustomerLoading && (
+                      <TouchableOpacity 
+                        onPress={async () => {
+                          const customer = await fetchCustomerByPhone(customerPhone);
+                          if (customer) {
+                            setCustomerName(customer.CustomerName || "");
+                            setCustomerEmail(customer.Email || "");
+                            setCustomerAddress(customer.Address || "");
+                          }
+                        }}
+                        style={styles.searchButton}
+                      >
+                        <Ionicons name="search" size={20} color="#28A745" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  {customerPhone && customerPhone.length >= 3 && !isCustomerLoading && customerLookupAttempted && (
+                    <ThemedText style={[
+                      styles.hintText,
+                      customerName || customerEmail || customerAddress ? styles.successText : styles.warningText
+                    ]}>
+                      {customerName || customerEmail || customerAddress ? 
+                        "✓ Customer found! Information auto-filled." : 
+                        "No customer found. New customer will be created on save."}
+                    </ThemedText>
+                  )}
+                </View>
+
+                <View style={{ marginBottom: 12 }}>
+                  <View style={styles.labelRow}>
+                    <Ionicons name="person-outline" size={14} color="#666" />
+                    <ThemedText style={[styles.label, { marginBottom: 0, marginLeft: 5 }]}>
+                      Customer Name {customerPhone && customerPhone.length >= 3 && !customerName && customerLookupAttempted && "*"}
+                    </ThemedText>
+                  </View>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Customer name (required for new customers)"
+                    value={customerName}
+                    onChangeText={setCustomerName}
+                  />
+                </View>
+
+                <View style={{ marginBottom: 12 }}>
+                  <View style={styles.labelRow}>
+                    <Ionicons name="mail-outline" size={14} color="#666" />
+                    <ThemedText style={[styles.label, { marginBottom: 0, marginLeft: 5 }]}>
+                      Email
+                    </ThemedText>
+                  </View>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Optional"
+                    keyboardType="email-address"
+                    value={customerEmail}
+                    onChangeText={setCustomerEmail}
+                  />
+                </View>
+
+                <View style={{ marginBottom: 12 }}>
+                  <View style={styles.labelRow}>
+                    <Ionicons name="location-outline" size={14} color="#666" />
+                    <ThemedText style={[styles.label, { marginBottom: 0, marginLeft: 5 }]}>
+                      Address
+                    </ThemedText>
+                  </View>
+                  <TextInput
+                    style={[styles.input, { minHeight: 45 }]}
+                    placeholder="Optional"
+                    multiline
+                    value={customerAddress}
+                    onChangeText={setCustomerAddress}
+                  />
+                </View>
               </View>
 
               {/* Action Buttons */}
@@ -1168,18 +1525,6 @@ const SummaryRow = ({ label, value, color }: any) => (
   <View style={styles.summaryRow}>
     <ThemedText style={styles.summaryLabel}>{label}</ThemedText>
     <ThemedText style={[styles.summaryValue, { color }]}>{value}</ThemedText>
-  </View>
-);
-
-const LabelInput = ({ label, icon, ...props }: any) => (
-  <View style={{ marginBottom: 12 }}>
-    <View style={styles.labelRow}>
-      <Ionicons name={icon} size={14} color="#666" />
-      <ThemedText style={[styles.label, { marginBottom: 0, marginLeft: 5 }]}>
-        {label}
-      </ThemedText>
-    </View>
-    <TextInput style={styles.input} {...props} />
   </View>
 );
 
@@ -1337,5 +1682,140 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: "center",
     fontWeight: "bold",
+  },
+  phoneInputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  searchButton: {
+    padding: 10,
+    backgroundColor: "#F0F8F0",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#28A745",
+  },
+  hintText: {
+    fontSize: 11,
+    marginTop: 4,
+    paddingHorizontal: 4,
+  },
+  successText: {
+    color: "#28A745",
+  },
+  warningText: {
+    color: "#FF6B35",
+  },
+  // Searchable Field Styles
+  searchableField: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#DDD",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 45,
+    backgroundColor: "#FAFAFA",
+    marginBottom: 4,
+  },
+  selectedText: {
+    fontSize: 14,
+    color: "#333",
+    fontWeight: "500",
+  },
+  placeholderText: {
+    fontSize: 14,
+    color: "#999",
+  },
+  // Search Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  searchModalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    width: "90%",
+    maxHeight: "80%",
+    overflow: "hidden",
+  },
+  searchModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+    backgroundColor: "#f8f9fa",
+  },
+  searchModalTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#333",
+  },
+  searchInputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+    backgroundColor: "#fff",
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 16,
+    color: "#333",
+  },
+  searchModalItem: {
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+  },
+  searchModalItemText: {
+    fontSize: 14,
+    color: "#333",
+    fontWeight: "500",
+  },
+  productCategoryText: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 2,
+  },
+  productItemContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  productStockText: {
+    fontSize: 12,
+    color: "#28a745",
+    fontWeight: "bold",
+  },
+  emptyContainer: {
+    padding: 40,
+    alignItems: "center",
+  },
+  emptyText: {
+    fontSize: 14,
+    color: "#999",
+  },
+  filterBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    backgroundColor: "#e7f1ff",
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 6,
+  },
+  filterBadgeText: {
+    fontSize: 12,
+    color: "#007bff",
   },
 });

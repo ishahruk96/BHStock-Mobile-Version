@@ -118,29 +118,32 @@ export default function TabLayout() {
                 <MenuItem label="Single Entry" icon="add-circle" onPress={() => go("/sales/single_sales_entry")} />
                 <MenuItem label="Sales Entry" icon="create" onPress={() => go("/sales/sales_entry")} />
                 <MenuItem label="Bulk Entry" icon="layers" onPress={() => go("/sales/sales_bulk_entry")} />
-                <MenuItem label="Restock" icon="refresh" onPress={() => go("/sales/restock_entry_history")} />
+                <MenuItem label="Retrun List" icon="refresh" onPress={() => go("/returnList")} />
                 <MenuItem label="Due" icon="cash" onPress={() => go("/sales/due")} />
               </View>
-
+    
               {/* SECURITY */}
               <Text style={styles.title}>Security</Text>
               <View style={styles.grid}>
                 <MenuItem label="Register" icon="person-add" onPress={() => go("/security/register")} />
-                <MenuItem label="Users" icon="people" onPress={() => go("/security/user_management")} />
+                {/* <MenuItem label="Users" icon="people" onPress={() => go("/security/user_management")} /> */}
                 {/* <MenuItem label="Permissions" icon="lock-closed" onPress={() => go("/security/permissions")} />
                 <MenuItem label="Organization" icon="business" onPress={() => go("/security/organization")} /> */}
                 <MenuItem label="Customer" icon="person" onPress={() => go("/security/customer")} />
                 {/* <MenuItem label="Access Control" icon="key" onPress={() => go("/security/access_control")} /> */}
+                <MenuItem label="Expense" icon="card" onPress={() => go("/expense")} />
+                <MenuItem label="Report" icon="bar-chart" onPress={() => go("/report")} />
+                <MenuItem label="Help" icon="help-circle" onPress={() => go("/help")} />
               </View>
 
               {/* OTHERS */}
-              <Text style={styles.title}>Others</Text>
+              {/* <Text style={styles.title}>Others</Text>
               <View style={styles.grid}>
                 <MenuItem label="Expense" icon="card" onPress={() => go("/expense")} />
                 <MenuItem label="Report" icon="bar-chart" onPress={() => go("/report")} />
                 <MenuItem label="Help" icon="help-circle" onPress={() => go("/help")} />
                 
-              </View>
+              </View> */}
             </ScrollView>
 
             <TouchableOpacity style={styles.closeBtn} onPress={() => setMenuVisible(false)}>

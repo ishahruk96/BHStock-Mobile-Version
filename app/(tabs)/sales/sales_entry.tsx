@@ -39,6 +39,14 @@ interface UserSession {
   Organizations: Organization[];
 }
 
+interface Customer {
+  CustomerId?: number;
+  CustomerName: string;
+  PhoneNumber: string;
+  Email: string;
+  Address: string;
+}
+
 // Helper function for API calls with authentication
 const apiRequest = async (endpoint: string, apiKey: string, options: RequestInit = {}) => {
   const response = await fetch(`${BASE_URL}${endpoint}`, {
@@ -317,6 +325,8 @@ export default function SalesEntryScreen() {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
+  const [isCustomerLoading, setIsCustomerLoading] = useState(false);
+  const [customerLookupAttempted, setCustomerLookupAttempted] = useState(false);
   
   // Payment State
   const [paymentAmount, setPaymentAmount] = useState("0");
@@ -351,6 +361,38 @@ export default function SalesEntryScreen() {
       initializeRows();
     }
   }, [organizationId, apiKey]);
+
+  // Customer phone lookup
+  useEffect(() => {
+    const lookupCustomer = async () => {
+      if (phoneNumber && phoneNumber.length >= 3) {
+        setCustomerLookupAttempted(true);
+        const customer = await fetchCustomerByPhone(phoneNumber);
+        if (customer) {
+          // Auto-fill customer information
+          setCustomerName(customer.CustomerName || "");
+          setEmail(customer.Email || "");
+          setAddress(customer.Address || "");
+        } else {
+          // Clear customer fields if not found (but keep phone number)
+          if (!customerName) {
+            setCustomerName("");
+          }
+          setEmail("");
+          setAddress("");
+        }
+      } else {
+        setCustomerLookupAttempted(false);
+      }
+    };
+
+    // Debounce the API call
+    const timer = setTimeout(() => {
+      lookupCustomer();
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [phoneNumber, organizationId]);
 
   const loadUserSession = async () => {
     try {
@@ -532,6 +574,53 @@ export default function SalesEntryScreen() {
     }
   };
 
+  // Fetch customer by phone number
+  const fetchCustomerByPhone = async (phoneNumber: string) => {
+    if (!phoneNumber || phoneNumber.length < 3 || !organizationId) {
+      return null;
+    }
+
+    try {
+      setIsCustomerLoading(true);
+      const url = `/Customer/GetByPhoneNumber?phoneNumber=${encodeURIComponent(phoneNumber)}&orgId=${organizationId}`;
+      const data = await apiRequest(url, apiKey);
+      
+      if (data.success && data.isData && data.customer) {
+        return data.customer;
+      }
+      return null;
+    } catch (error) {
+      console.error("Error fetching customer:", error);
+      return null;
+    } finally {
+      setIsCustomerLoading(false);
+    }
+  };
+
+  // Create new customer
+  const createCustomer = async (customerData: Customer) => {
+    try {
+      const data = await apiRequest("/Customer/Create", apiKey, {
+        method: "POST",
+        body: JSON.stringify({
+          CustomerName: customerData.CustomerName,
+          PhoneNumber: customerData.PhoneNumber,
+          Email: customerData.Email || "",
+          Address: customerData.Address || "",
+          OrganizationId: organizationId
+        }),
+      });
+
+      if (data.success && data.customer) {
+        return data.customer;
+      }
+      return null;
+    } catch (error) {
+      console.error("Error creating customer:", error);
+      return null;
+    }
+  };
+
   const handleOrgChange = (orgId: number) => {
     if (orgId === 0) return;
     
@@ -547,6 +636,7 @@ export default function SalesEntryScreen() {
       setPhoneNumber("");
       setEmail("");
       setAddress("");
+      setCustomerLookupAttempted(false);
       setPaymentAmount("0");
       setPaymentMethod("Cash");
       setPaymentReference("");
@@ -604,18 +694,24 @@ export default function SalesEntryScreen() {
   };
 
   const loadCustomerByPhoneNumber = async (phone: string) => {
-    if (!phone || phone.length < 6) return;
+    if (!phone || phone.length < 3) return;
     
     try {
-      const response = await apiRequest(`/Stock/GetByPhoneNumber?phoneNumber=${phone}&orgId=${organizationId}`, apiKey);
-      
-      if (response.success && response.isData && response.customer) {
-        setCustomerName(response.customer.CustomerName || "");
-        setEmail(response.customer.Email || "");
-        setAddress(response.customer.Address || "");
+      setIsCustomerLoading(true);
+      const customer = await fetchCustomerByPhone(phone);
+      if (customer) {
+        setCustomerName(customer.CustomerName || "");
+        setEmail(customer.Email || "");
+        setAddress(customer.Address || "");
+      } else {
+        setCustomerName("");
+        setEmail("");
+        setAddress("");
       }
     } catch (error) {
       console.error("Error loading customer:", error);
+    } finally {
+      setIsCustomerLoading(false);
     }
   };
 
@@ -753,6 +849,7 @@ export default function SalesEntryScreen() {
     setPhoneNumber("");
     setEmail("");
     setAddress("");
+    setCustomerLookupAttempted(false);
     setPaymentAmount("0");
     setPaymentMethod("Cash");
     setPaymentReference("");
@@ -787,17 +884,46 @@ export default function SalesEntryScreen() {
     updateSummary();
   }, [rows, paymentAmount, updateSummary]);
 
-  const getCustomerData = () => {
-    if (customerName || phoneNumber || email || address) {
-      if (!phoneNumber) {
-        Alert.alert("Validation Error", "Phone number is required when customer information is provided");
-        return null;
+  const getCustomerData = async () => {
+    // Check if customer exists
+    let customerId = null;
+    let customerData = null;
+    
+    if (phoneNumber && phoneNumber.length >= 3) {
+      try {
+        // Try to find existing customer
+        const existingCustomer = await fetchCustomerByPhone(phoneNumber);
+        if (existingCustomer && existingCustomer.CustomerId) {
+          customerId = existingCustomer.CustomerId;
+          customerData = existingCustomer;
+        } else if (customerName) {
+          // Create new customer if phone exists but customer not found
+          const newCustomer = await createCustomer({
+            CustomerName: customerName,
+            PhoneNumber: phoneNumber,
+            Email: email || "",
+            Address: address || ""
+          });
+          if (newCustomer && newCustomer.CustomerId) {
+            customerId = newCustomer.CustomerId;
+            customerData = newCustomer;
+          }
+        }
+      } catch (error) {
+        console.error("Error handling customer:", error);
       }
+    }
+
+    if (customerId) {
+      return { customerId, customerData };
+    } else if (customerName || phoneNumber) {
       return {
-        customerName: customerName || "",
-        phoneNumber: phoneNumber,
-        email: email || "",
-        address: address || "",
+        customerData: {
+          CustomerName: customerName || "",
+          PhoneNumber: phoneNumber || "",
+          Email: email || "",
+          Address: address || "",
+        }
       };
     }
     return null;
@@ -859,6 +985,9 @@ export default function SalesEntryScreen() {
       return;
     }
 
+    // Get customer data
+    const customerInfo = await getCustomerData();
+
     const saleData: any = {
       transactionDate: new Date().toISOString(),
       dailyExpense: parseFloat(dailyExpense) || 0,
@@ -870,9 +999,13 @@ export default function SalesEntryScreen() {
       PaymentReference: paymentReference,
     };
 
-    const customerData = getCustomerData();
-    if (customerData) {
-      saleData.customer = customerData;
+    // Add customer information
+    if (customerInfo) {
+      if (customerInfo.customerId) {
+        saleData.CustomerId = customerInfo.customerId;
+      } else if (customerInfo.customerData) {
+        saleData.Customer = customerInfo.customerData;
+      }
     }
 
     setLoading(true);
@@ -884,9 +1017,13 @@ export default function SalesEntryScreen() {
       });
 
       if (response.Success) {
-        const successMessage = `Sales saved successfully!\nTransaction: #${response.TransactionNumber || ""}${
-          due > 0 ? `\nDue Amount: ৳${due.toFixed(2)}` : ""
-        }`;
+        let successMessage = `Sales saved successfully!\nTransaction: #${response.TransactionNumber || ""}`;
+        if (due > 0) {
+          successMessage += `\nDue Amount: ৳${due.toFixed(2)}`;
+        }
+        if (customerInfo?.customerData) {
+          successMessage += `\nCustomer: ${customerInfo.customerData.CustomerName}`;
+        }
         
         Alert.alert("Success", successMessage, [
           { text: "OK", onPress: () => refreshTable() }
@@ -1020,7 +1157,7 @@ export default function SalesEntryScreen() {
                 selectedValue={organizationId || 0}
                 onValueChange={handleOrgChange}
               >
-                <Picker.Item label="-- Select Organization --" value={0} />
+                {/* <Picker.Item label="-- Select Organization --" value={0} /> */}
                 {organizations.map((org) => (
                   <Picker.Item
                     key={org.OrganizationId}
@@ -1061,25 +1198,47 @@ export default function SalesEntryScreen() {
           <ThemedText style={styles.sectionTitle}>Customer Information</ThemedText>
           <View style={styles.formGrid}>
             <View style={styles.inputGroup}>
-              <ThemedText style={styles.label}>Name</ThemedText>
+              <ThemedText style={styles.label}>Phone Number</ThemedText>
+              <View style={styles.phoneInputContainer}>
+                <TextInput
+                  style={[styles.input, { flex: 1 }]}
+                  keyboardType="phone-pad"
+                  placeholder="01XXX..."
+                  placeholderTextColor="#999"
+                  value={phoneNumber}
+                  onChangeText={setPhoneNumber}
+                />
+                {isCustomerLoading && (
+                  <ActivityIndicator size="small" color="#28a745" style={styles.loadingIcon} />
+                )}
+                {phoneNumber && phoneNumber.length >= 3 && !isCustomerLoading && (
+                  <TouchableOpacity 
+                    onPress={() => loadCustomerByPhoneNumber(phoneNumber)}
+                    style={styles.searchButton}
+                  >
+                    <Ionicons name="search" size={20} color="#28a745" />
+                  </TouchableOpacity>
+                )}
+              </View>
+              {phoneNumber && phoneNumber.length >= 3 && !isCustomerLoading && customerLookupAttempted && (
+                <ThemedText style={[
+                  styles.hintText,
+                  customerName || email || address ? styles.successText : styles.warningText
+                ]}>
+                  {customerName || email || address ? 
+                    "✓ Customer found! Information auto-filled." : 
+                    "No customer found. New customer will be created on save."}
+                </ThemedText>
+              )}
+            </View>
+            <View style={styles.inputGroup}>
+              <ThemedText style={styles.label}>Customer Name</ThemedText>
               <TextInput
                 style={styles.input}
-                placeholder="Enter Name"
+                placeholder="Enter Customer Name"
                 placeholderTextColor="#999"
                 value={customerName}
                 onChangeText={setCustomerName}
-              />
-            </View>
-            <View style={styles.inputGroup}>
-              <ThemedText style={styles.label}>Phone Number</ThemedText>
-              <TextInput
-                style={styles.input}
-                keyboardType="phone-pad"
-                placeholder="01XXX..."
-                placeholderTextColor="#999"
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-                onBlur={() => loadCustomerByPhoneNumber(phoneNumber)}
               />
             </View>
             <View style={styles.inputGroup}>
@@ -1197,7 +1356,7 @@ export default function SalesEntryScreen() {
                     <ThemedText style={item.category ? styles.selectedText : styles.placeholderText}>
                       {item.category || "Select Category"}
                     </ThemedText>
-                    <Ionicons name="search" size={18} color="#666" />
+                    {/* <Ionicons name="search" size={18} color="#666" /> */}
                   </View>
                 </TouchableOpacity>
                 
@@ -1211,7 +1370,7 @@ export default function SalesEntryScreen() {
                     <ThemedText style={item.productName ? styles.selectedText : styles.placeholderText}>
                       {item.productName || "Select Product"}
                     </ThemedText>
-                    <Ionicons name="search" size={18} color="#666" />
+                    {/* <Ionicons name="search" size={18} color="#666" /> */}
                   </View>
                 </TouchableOpacity>
                 
@@ -1483,5 +1642,33 @@ const styles = StyleSheet.create({
   filterBadgeText: {
     fontSize: 12,
     color: "#007bff",
+  },
+  
+  // Phone Input Styles
+  phoneInputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  searchButton: {
+    padding: 10,
+    backgroundColor: "#f0f8f0",
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#28a745",
+  },
+  loadingIcon: {
+    marginLeft: 8,
+  },
+  hintText: {
+    fontSize: 11,
+    marginTop: 4,
+    paddingHorizontal: 4,
+  },
+  successText: {
+    color: "#28a745",
+  },
+  warningText: {
+    color: "#ff6b35",
   },
 });

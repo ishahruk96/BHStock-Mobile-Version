@@ -66,25 +66,45 @@ interface Transaction {
 
 // ─── Pure helper functions ─────────────────────────────────────────
 
+const parseDateFromJson = (dateString: string): Date | null => {
+  try {
+    if (!dateString) return null;
+    const match = dateString.match(/\/Date\((\d+)\)\//);
+    return match ? new Date(parseInt(match[1])) : new Date(dateString);
+  } catch {
+    return null;
+  }
+};
+
+// ✅ Sort transactions by date (newest first)
+const sortTransactionsByDate = (transactions: Transaction[]): Transaction[] => {
+  return [...transactions].sort((a, b) => {
+    const dateA = parseDateFromJson(a.TransactionDate);
+    const dateB = parseDateFromJson(b.TransactionDate);
+    
+    if (!dateA && !dateB) return 0;
+    if (!dateA) return 1;
+    if (!dateB) return -1;
+    
+    return dateB.getTime() - dateA.getTime();
+  });
+};
+
 const formatDate = (dateString: string): string => {
   try {
     if (!dateString) return "N/A";
     const match = dateString.match(/\/Date\((\d+)\)\//);
     if (match) {
       const date = new Date(parseInt(match[1]));
-      return (
-        date.toLocaleDateString("en-GB", {
-          day: "2-digit",
-          month: "2-digit",
-          year: "numeric",
-        }) +
-        " " +
-        date.toLocaleTimeString("en-US", {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: true,
-        })
-      );
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = date.toLocaleString('default', { month: 'short' });
+      const year = date.getFullYear();
+      const time = date.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+      return `${day} ${month} ${year} ${time}`;
     }
     return dateString;
   } catch {
@@ -109,26 +129,6 @@ const parseDateString = (dateStr: string): Date | null => {
     );
   }
   return null;
-};
-
-const parseDateFromJson = (dateString: string): Date | null => {
-  try {
-    if (!dateString) return null;
-    const match = dateString.match(/\/Date\((\d+)\)\//);
-    return match ? new Date(parseInt(match[1])) : new Date(dateString);
-  } catch {
-    return null;
-  }
-};
-
-const isToday = (transactionDate: string): boolean => {
-  const parsed = parseDateFromJson(transactionDate);
-  if (!parsed) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const txDay = new Date(parsed);
-  txDay.setHours(0, 0, 0, 0);
-  return txDay.getTime() === today.getTime();
 };
 
 const getDateRange = (preset: string): { start: Date; end: Date } => {
@@ -401,6 +401,11 @@ export default function SalesListScreen() {
   // Organization selector states
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [selectedOrgName, setSelectedOrgName] = useState<string>("");
+  
+  // ✅ Store API keys for each organization from session
+  const [orgApiKeys, setOrgApiKeys] = useState<Record<number, string>>({});
+  // ✅ Store organization names from API
+  const [orgNames, setOrgNames] = useState<Record<number, string>>({});
 
   // Temp filter states
   const [tempSelectedCategory, setTempSelectedCategory] = useState("");
@@ -430,10 +435,8 @@ export default function SalesListScreen() {
     avgProfitMargin: 0,
   });
 
-  // Use ref to track current organization to prevent duplicate calls
   const currentOrgRef = useRef<number | null>(null);
 
-  // Load user session on mount
   useEffect(() => {
     loadUserSession();
   }, []);
@@ -448,74 +451,164 @@ export default function SalesListScreen() {
       }
 
       const userData = JSON.parse(session);
-      const key = userData.ApiKey || "";
+      
+      const mainApiKey = userData.ApiKey || "";
       const uid = userData.UserId;
-      const defaultOrgId = userData.OrganizationId || userData.orgId || null;
+      const defaultOrgId = userData.OrganizationId || null;
+      const defaultOrgName = userData.OrganizationName || "Unknown Org";
 
-      setApiKey(key);
+      console.log("Loaded session - Main ApiKey:", mainApiKey);
+      console.log("Loaded session - UserId:", uid);
+      console.log("Loaded session - Default OrganizationId:", defaultOrgId);
+      console.log("Loaded session - Default OrganizationName:", defaultOrgName);
+
+      setApiKey(mainApiKey);
       setUserId(uid);
       setUserName(userData.UserName || "User");
 
-      console.log("Loaded session - ApiKey:", key);
-      console.log("Loaded session - UserId:", uid);
-      console.log("Loaded session - Default OrganizationId:", defaultOrgId);
+      // ✅ Get organizations with their API keys from session
+      const orgsFromSession = userData.Organizations || [];
+      
+      if (orgsFromSession.length > 0) {
+        console.log(`✅ Found ${orgsFromSession.length} organizations in session`);
+        
+        // ✅ Build API keys map from session data
+        const keysMap: Record<number, string> = {};
+        orgsFromSession.forEach((org: any) => {
+          const orgId = org.OrganizationId;
+          const orgApiKey = org.ApiKey;
+          if (orgId && orgApiKey) {
+            keysMap[orgId] = orgApiKey;
+            console.log(`📌 Org ${orgId} has API Key: ${orgApiKey.substring(0, 20)}...`);
+          }
+        });
+        setOrgApiKeys(keysMap);
 
-      const headers = {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      };
-
-      let initialOrgId: number | null = defaultOrgId;
-      let initialOrgName = "";
-
-      try {
-        const orgUrl = `${ORG_LIST_URL}?userId=${uid}`;
-        const orgResponse = await fetch(orgUrl, { headers });
-        const orgText = await orgResponse.text();
-        const orgData = JSON.parse(orgText);
-
-        if (
-          orgData &&
-          orgData.success &&
-          Array.isArray(orgData.data) &&
-          orgData.data.length > 0
-        ) {
-          setOrganizations(orgData.data);
-
-          const hasDefaultOrg = orgData.data.some(
-            (o: any) => (o.organizationId || o.id) === defaultOrgId
-          );
-          const initialOrg = hasDefaultOrg
-            ? orgData.data.find(
-                (o: any) => (o.organizationId || o.id) === defaultOrgId
-              )
-            : orgData.data[0];
-
-          initialOrgId = initialOrg.organizationId || initialOrg.id;
-          initialOrgName =
-            initialOrg.organizationName || initialOrg.name || "Unknown Org";
-        } else {
-          setOrganizations([]);
-        }
-      } catch (orgErr) {
-        console.error("Org list fetch error:", orgErr);
-        setOrganizations([]);
-      }
-
-      setOrganizationId(initialOrgId);
-      setSelectedOrgName(initialOrgName);
-      currentOrgRef.current = initialOrgId;
-
-      // Fetch transactions after resolving organization
-      if (key && initialOrgId) {
-        await fetchTransactionsForOrg(key, initialOrgId);
+        // ✅ Fetch organization names from API
+        await fetchOrganizationNames(uid, mainApiKey, defaultOrgId, defaultOrgName, orgsFromSession, keysMap);
       } else {
+        console.log("No organizations in session");
         setLoading(false);
       }
     } catch (error) {
       console.error("Error loading session:", error);
       Alert.alert("Error", "Failed to load user session");
       setLoading(false);
+    }
+  };
+
+  // ✅ Fetch organization names from API
+  const fetchOrganizationNames = async (
+    uid: string, 
+    apiKey: string, 
+    defaultOrgId: number | null,
+    defaultOrgName: string,
+    sessionOrgs: any[],
+    keysMap: Record<number, string>
+  ) => {
+    try {
+      const headers = {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      };
+
+      const orgUrl = `${ORG_LIST_URL}?userId=${uid}`;
+      const orgResponse = await fetch(orgUrl, { headers });
+      const orgText = await orgResponse.text();
+      const orgData = JSON.parse(orgText);
+
+      let orgNamesMap: Record<number, string> = {};
+      let combinedOrgs: any[] = [];
+
+      if (orgData && orgData.success && Array.isArray(orgData.data) && orgData.data.length > 0) {
+        console.log("✅ Organization names fetched from API:", orgData.data.length);
+        
+        // Build organization names map from API response
+        orgData.data.forEach((org: any) => {
+          const orgId = org.organizationId || org.id;
+          const orgName = org.organizationName || org.name || `Organization ${orgId}`;
+          orgNamesMap[orgId] = orgName;
+        });
+        
+        setOrgNames(orgNamesMap);
+
+        // Combine session orgs with API names
+        combinedOrgs = sessionOrgs.map((sessionOrg: any) => {
+          const orgId = sessionOrg.OrganizationId;
+          return {
+            OrganizationId: orgId,
+            ApiKey: sessionOrg.ApiKey,
+            OrganizationName: orgNamesMap[orgId] || `Organization ${orgId}`
+          };
+        });
+      } else {
+        // Fallback: Use session orgs with default name
+        combinedOrgs = sessionOrgs.map((org: any) => ({
+          ...org,
+          OrganizationName: defaultOrgName
+        }));
+      }
+
+      setOrganizations(combinedOrgs);
+
+      // Find the default organization
+      let initialOrg = combinedOrgs.find((o: any) => o.OrganizationId === defaultOrgId);
+      if (!initialOrg && combinedOrgs.length > 0) {
+        initialOrg = combinedOrgs[0];
+      }
+
+      if (initialOrg) {
+        const initialOrgId = initialOrg.OrganizationId;
+        const initialOrgApiKey = keysMap[initialOrgId] || apiKey;
+        const initialOrgName = initialOrg.OrganizationName || defaultOrgName;
+        
+        console.log(`🔑 Initial Organization - ID: ${initialOrgId}, Name: "${initialOrgName}"`);
+
+        setOrganizationId(initialOrgId);
+        setSelectedOrgName(initialOrgName);
+        setApiKey(initialOrgApiKey);
+        currentOrgRef.current = initialOrgId;
+
+        if (initialOrgApiKey && initialOrgId) {
+          await fetchTransactionsForOrg(initialOrgApiKey, initialOrgId);
+        } else {
+          setLoading(false);
+        }
+      } else {
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error("Error fetching organization names:", error);
+      
+      // Fallback: Use session orgs with default name
+      const combinedOrgs = sessionOrgs.map((org: any) => ({
+        ...org,
+        OrganizationName: defaultOrgName
+      }));
+      setOrganizations(combinedOrgs);
+
+      let initialOrg = combinedOrgs.find((o: any) => o.OrganizationId === defaultOrgId);
+      if (!initialOrg && combinedOrgs.length > 0) {
+        initialOrg = combinedOrgs[0];
+      }
+
+      if (initialOrg) {
+        const initialOrgId = initialOrg.OrganizationId;
+        const initialOrgApiKey = keysMap[initialOrgId] || apiKey;
+        
+        setOrganizationId(initialOrgId);
+        setSelectedOrgName(defaultOrgName);
+        setApiKey(initialOrgApiKey);
+        currentOrgRef.current = initialOrgId;
+
+        if (initialOrgApiKey && initialOrgId) {
+          await fetchTransactionsForOrg(initialOrgApiKey, initialOrgId);
+        } else {
+          setLoading(false);
+        }
+      } else {
+        setLoading(false);
+      }
     }
   };
 
@@ -536,7 +629,6 @@ export default function SalesListScreen() {
       setError(null);
       setLoading(true);
 
-      // Fetch transactions with organization ID in query parameter
       const url = `${API_URL}?organizationId=${orgId}`;
       console.log("=========================================");
       console.log("Fetching transactions for Organization:", orgId);
@@ -587,23 +679,15 @@ export default function SalesListScreen() {
         }
       }
 
+      transactionsData = sortTransactionsByDate(transactionsData);
+
       console.log(`✅ Total transactions fetched for org ${orgId}: ${transactionsData.length}`);
       
-      if (transactionsData.length > 0) {
-        console.log("Sample transaction:", {
-          id: transactionsData[0].TransactionId,
-          orgId: transactionsData[0].OrganizationId,
-          product: transactionsData[0].ProductName
-        });
-      }
-      
-      // Extract unique categories from transactions
       const uniqueCategories = [
         ...new Set(transactionsData.map((i) => i.Category).filter(Boolean)),
       ];
       setCategories(uniqueCategories);
       
-      // Apply current filters
       let filtered = [...transactionsData];
       
       if (!appliedShowAllHistory) {
@@ -677,14 +761,11 @@ export default function SalesListScreen() {
   };
 
   const applyFiltersToCurrentData = useCallback(() => {
-    // This function is called when filters change, but data is already loaded
-    // We need to re-fetch with current filters
     if (apiKey && organizationId) {
       fetchTransactionsForOrg(apiKey, organizationId);
     }
   }, [apiKey, organizationId, appliedSearchText, appliedSelectedCategory, appliedSelectedStatus, appliedStartDate, appliedEndDate, appliedShowAllHistory]);
 
-  // Apply filters when filter criteria change
   useEffect(() => {
     if (apiKey && organizationId && !loading) {
       applyFiltersToCurrentData();
@@ -762,7 +843,7 @@ export default function SalesListScreen() {
     }
   };
 
-  // Organization change handler
+  // ✅ Organization change handler
   const handleOrgChange = useCallback(
     async (itemValue: any) => {
       if (itemValue === undefined || itemValue === null) return;
@@ -771,18 +852,27 @@ export default function SalesListScreen() {
 
       console.log(`🔄 Switching organization from ${organizationId} to ${orgIdValue}`);
       
-      // Update organization ID state
+      const orgApiKey = orgApiKeys[orgIdValue];
+      if (!orgApiKey) {
+        console.error(`❌ No API key found for organization ${orgIdValue}`);
+        Alert.alert("Error", "API key not found for this organization");
+        return;
+      }
+      
+      console.log(`🔑 Using API key for org ${orgIdValue}: ${orgApiKey.substring(0, 20)}...`);
+      
       setOrganizationId(orgIdValue);
+      setApiKey(orgApiKey);
       currentOrgRef.current = orgIdValue;
 
       const currentOrg = organizations.find(
-        (org: any) => (org.organizationId || org.id) === orgIdValue
+        (org: any) => org.OrganizationId === orgIdValue
       );
-      setSelectedOrgName(
-        currentOrg?.organizationName || currentOrg?.name || "Unknown Org"
-      );
+      
+      const orgName = currentOrg?.OrganizationName || `Organization ${orgIdValue}`;
+      console.log(`📌 Selected Organization: "${orgName}" (ID: ${orgIdValue})`);
+      setSelectedOrgName(orgName);
 
-      // Reset filters when switching organization
       setTempSelectedCategory("");
       setTempSelectedStatus("");
       setTempStartDate("");
@@ -795,16 +885,25 @@ export default function SalesListScreen() {
       setAppliedEndDate("");
       setAppliedShowAllHistory(false);
 
-      // Clear current data immediately
       setFilteredTransactions([]);
-      
-      // Fetch new data for the selected organization
-      if (apiKey) {
-        await fetchTransactionsForOrg(apiKey, orgIdValue);
-      }
+      await fetchTransactionsForOrg(orgApiKey, orgIdValue);
     },
-    [organizationId, organizations, apiKey]
+    [organizationId, organizations, orgApiKeys]
   );
+
+  const isReturnOrExchange = (transaction: Transaction): boolean => {
+    return transaction.TransactionType?.toLowerCase() === 'return' || 
+           transaction.TransactionType?.toLowerCase() === 'exchange' ||
+           transaction.IsExchangeRelated === true;
+  };
+
+  const isUnpaid = (transaction: Transaction): boolean => {
+    return transaction.PaymentStatus?.toLowerCase() === 'unpaid';
+  };
+
+  const isFullyPaid = (transaction: Transaction): boolean => {
+    return transaction.PaymentStatus?.toLowerCase() === 'paid';
+  };
 
   if (error && !loading) {
     return (
@@ -823,7 +922,6 @@ export default function SalesListScreen() {
       showsVerticalScrollIndicator={true}
       bounces={true}
     >
-      {/* Header */}
       <View style={styles.header}>
         <View>
           <ThemedText style={styles.headerTitle}>Sales List</ThemedText>
@@ -840,7 +938,7 @@ export default function SalesListScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Organization Picker - always show if organizations exist */}
+      {/* Organization Picker - shows unique names for each org */}
       {organizations.length > 0 && (
         <View style={styles.orgPickerContainer}>
           <Picker
@@ -850,15 +948,16 @@ export default function SalesListScreen() {
             dropdownIconColor="#007bff"
           >
             {organizations.map((org: any, index: number) => {
-              const id = org.organizationId || org.id;
-              const name = org.organizationName || org.name || "Unknown Org";
+              const id = org.OrganizationId;
+              // Use the organization name from the combined data
+              const name = org.OrganizationName || `Organization ${id}`;
+              console.log(`Picker item ${index}: ID=${id}, Name="${name}"`);
               return <Picker.Item key={id || index} label={name} value={id} />;
             })}
           </Picker>
         </View>
       )}
 
-      {/* Search Bar */}
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
@@ -869,7 +968,6 @@ export default function SalesListScreen() {
         />
       </View>
 
-      {/* Active Filters */}
       {(appliedSelectedCategory ||
         appliedSelectedStatus ||
         appliedStartDate ||
@@ -915,64 +1013,62 @@ export default function SalesListScreen() {
         </View>
       )}
 
-      {/* Summary Cards */}
       {filteredTransactions.length > 0 && (
-  <View style={styles.summaryContainer}>
-    <View style={styles.summaryHeader}>
-      <ThemedText style={styles.summaryTitle}>
-        Sales Summary {selectedOrgName ? `- ${selectedOrgName}` : ""}
-      </ThemedText>
-    </View>
+        <View style={styles.summaryContainer}>
+          <View style={styles.summaryHeader}>
+            <ThemedText style={styles.summaryTitle}>
+              Sales Summary {selectedOrgName ? `- ${selectedOrgName}` : ""}
+            </ThemedText>
+          </View>
 
-    <View style={styles.summaryGrid}>
-      <View style={styles.summaryBox}>
-        <ThemedText style={styles.summaryLabel}>Transactions</ThemedText>
-        <ThemedText style={styles.summaryValue}>
-          {summary.totalTxn}
-        </ThemedText>
-      </View>
+          <View style={styles.summaryGrid}>
+            <View style={styles.summaryBox}>
+              <ThemedText style={styles.summaryLabel}>Transactions</ThemedText>
+              <ThemedText style={styles.summaryValue}>
+                {summary.totalTxn}
+              </ThemedText>
+            </View>
 
-      <View style={styles.summaryBox}>
-        <ThemedText style={styles.summaryLabel}>Total Quantity</ThemedText>
-        <ThemedText style={styles.summaryValue}>
-          {summary.totalQty}
-        </ThemedText>
-      </View>
+            <View style={styles.summaryBox}>
+              <ThemedText style={styles.summaryLabel}>Total Quantity</ThemedText>
+              <ThemedText style={styles.summaryValue}>
+                {summary.totalQty}
+              </ThemedText>
+            </View>
 
-      <View style={styles.summaryBox}>
-        <ThemedText style={styles.summaryLabel}>Total Amount</ThemedText>
-        <ThemedText style={[styles.summaryValue, styles.greenText]}>
-          ৳{summary.totalAmount.toFixed(2)}
-        </ThemedText>
-      </View>
+            <View style={styles.summaryBox}>
+              <ThemedText style={styles.summaryLabel}>Total Amount</ThemedText>
+              <ThemedText style={[styles.summaryValue, styles.greenText]}>
+                ৳{summary.totalAmount.toFixed(2)}
+              </ThemedText>
+            </View>
 
-      <View style={styles.summaryBox}>
-        <ThemedText style={styles.summaryLabel}>Total Profit</ThemedText>
-        <ThemedText style={[styles.summaryValue, styles.profitText]}>
-          ৳{summary.totalProfit.toFixed(2)}
-        </ThemedText>
-      </View>
+            <View style={styles.summaryBox}>
+              <ThemedText style={styles.summaryLabel}>Total Profit</ThemedText>
+              <ThemedText style={[styles.summaryValue, styles.profitText]}>
+                ৳{summary.totalProfit.toFixed(2)}
+              </ThemedText>
+            </View>
 
-      <View style={styles.summaryBox}>
-        <ThemedText style={styles.summaryLabel}>Total Due</ThemedText>
-        <ThemedText style={[styles.summaryValue, styles.dueText]}>
-          ৳{summary.totalDue.toFixed(2)}
-        </ThemedText>
-      </View>
+            <View style={styles.summaryBox}>
+              <ThemedText style={styles.summaryLabel}>Total Due</ThemedText>
+              <ThemedText style={[styles.summaryValue, styles.dueText]}>
+                ৳{summary.totalDue.toFixed(2)}
+              </ThemedText>
+            </View>
 
-      <View style={styles.summaryBox}>
-        <ThemedText style={styles.summaryLabel}>
-          Avg Profit Margin
-        </ThemedText>
-        <ThemedText style={[styles.summaryValue, styles.blueText]}>
-          {summary.avgProfitMargin.toFixed(1)}%
-        </ThemedText>
-      </View>
-    </View>
-  </View>
-)}
+            <View style={styles.summaryBox}>
+              <ThemedText style={styles.summaryLabel}>
+                Avg Profit Margin
+              </ThemedText>
+              <ThemedText style={[styles.summaryValue, styles.blueText]}>
+                {summary.avgProfitMargin.toFixed(1)}%
+              </ThemedText>
+            </View>
+          </View>
+        </View>
+      )}
 
-      {/* Table */}
       <View style={styles.tableContainer}>
         {filteredTransactions.length > 0 ? (
           <ScrollView
@@ -983,7 +1079,6 @@ export default function SalesListScreen() {
             <View
               style={{ width: 40 + 85 + 140 + 50 + 75 + 85 + 85 + 75 + 80 + 120 }}
             >
-              {/* Header */}
               <View style={styles.headerRow}>
                 {[
                   { label: "#", style: styles.cellSn },
@@ -1003,7 +1098,6 @@ export default function SalesListScreen() {
                 ))}
               </View>
 
-              {/* Rows */}
               <FlatList
                 data={filteredTransactions}
                 keyExtractor={(item, index) =>
@@ -1017,8 +1111,22 @@ export default function SalesListScreen() {
                     (item.ProfitPerUnit || 0) * (item.Quantity || 0);
                   const amount =
                     item.SalesValue || item.TotalAmount || item.Amount || 0;
+                  
+                  const isReturn = isReturnOrExchange(item);
+                  const isUnpaidStatus = isUnpaid(item);
+                  const isPaid = isFullyPaid(item);
+                  
+                  let rowBgColor = '#fff';
+                  if (isUnpaidStatus) {
+                    rowBgColor = '#ffebee';
+                  } else if (isReturn) {
+                    rowBgColor = '#fff3e0';
+                  } else if (isPaid) {
+                    rowBgColor = '#e8f5e9';
+                  }
+
                   return (
-                    <View style={styles.tableRow}>
+                    <View style={[styles.tableRow, { backgroundColor: rowBgColor }]}>
                       <View
                         style={[styles.cell, styles.cellSn, styles.cellBorder]}
                       >
@@ -1078,7 +1186,7 @@ export default function SalesListScreen() {
                       <View
                         style={[styles.cell, styles.cellProfit, styles.cellBorder]}
                       >
-                        <ThemedText style={styles.profitText}>
+                        <ThemedText style={[styles.profitText, { fontWeight: 'bold' }]}>
                           {profit.toFixed(2)}
                         </ThemedText>
                       </View>
@@ -1111,14 +1219,15 @@ export default function SalesListScreen() {
                               router.push({
                                 pathname: "/ret_ex_transaction",
                                 params: {
-                                  transactionId: item.TransactionId,
+                                  transactionNumber: item.TransactionNumber,
                                   organizationId: organizationId,
+                                  transactionId: item.TransactionId,
                                 },
                               });
                             }}
                           >
                             <ThemedText style={styles.actionBtnText}>
-                              Ext/Ret
+                              Ret/Ex
                             </ThemedText>
                           </TouchableOpacity>
                           <TouchableOpacity
@@ -1171,7 +1280,6 @@ export default function SalesListScreen() {
         )}
       </View>
 
-      {/* Date Pickers */}
       {showStartDatePicker && (
         <DateTimePicker
           value={parseDateString(tempStartDate) || new Date()}
@@ -1201,7 +1309,6 @@ export default function SalesListScreen() {
         />
       )}
 
-      {/* Filter Modal */}
       <FilterModal
         visible={showFilterModal}
         onClose={handleCloseModal}
@@ -1311,68 +1418,68 @@ const styles = StyleSheet.create({
   allHistoryText: { color: "#fff", fontSize: 12, fontWeight: "bold" },
 
   summaryContainer: {
-  marginHorizontal: 12,
-  marginVertical: 10,
-  borderRadius: 14,
-  overflow: "hidden",
-  backgroundColor: "#FFFFFF",
-  elevation: 4,
-  shadowColor: "#000",
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.1,
-  shadowRadius: 4,
-},
+    marginHorizontal: 12,
+    marginVertical: 10,
+    borderRadius: 14,
+    overflow: "hidden",
+    backgroundColor: "#FFFFFF",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
 
-summaryHeader: {
-  backgroundColor: "#67B968",
-  paddingVertical: 10,
-  paddingHorizontal: 12,
-},
+  summaryHeader: {
+    backgroundColor: "#67B968",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
 
-summaryTitle: {
-  color: "#FFFFFF",
-  fontSize: 15,
-  fontWeight: "700",
-  textAlign: "center",
-},
+  summaryTitle: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+    textAlign: "center",
+  },
 
-summaryGrid: {
-  flexDirection: "row",
-  flexWrap: "wrap",
-},
+  summaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+  },
 
-summaryBox: {
-  width: "33.33%",
-  height: 80,
-  justifyContent: "center",
-  alignItems: "center",
-  borderWidth: 0.5,
-  borderColor: "#E5E7EB",
-  backgroundColor: "#FAFAFA",
-  paddingHorizontal: 4,
-},
+  summaryBox: {
+    width: "33.33%",
+    height: 80,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
+    backgroundColor: "#FAFAFA",
+    paddingHorizontal: 4,
+  },
 
-summaryLabel: {
-  fontSize: 10,
-  color: "#6B7280",
-  textAlign: "center",
-  marginBottom: 4,
-},
+  summaryLabel: {
+    fontSize: 10,
+    color: "#6B7280",
+    textAlign: "center",
+    marginBottom: 4,
+  },
 
-summaryValue: {
-  fontSize: 15,
-  fontWeight: "700",
-  color: "#1F2937",
-  textAlign: "center",
-},
+  summaryValue: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#1F2937",
+    textAlign: "center",
+  },
 
-greenText: {
-  color: "#2E7D32",
-},
+  greenText: {
+    color: "#2E7D32",
+  },
 
-blueText: {
-  color: "#2563EB",
-},
+  blueText: {
+    color: "#2563EB",
+  },
 
   highlightText: { color: "#007bff" },
   highlightLabel: { color: "#007bff", fontSize: 10 },
